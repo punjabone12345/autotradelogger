@@ -701,11 +701,11 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                         if c_c <= ext_low:
                             ext_low, ceiling, state = c_l, c_h, 'SEEK_CC'
                         else:
-                            l_wick = c_o - c_l if c_c > c_o else c_c - c_l
-                            body = abs(c_c - c_o)
-                            ratio_ok = (body >= 0.002) if (l_wick >= 0.100) else (body >= 0.003)
-                            if ratio_ok:
-                                if c_c > c_o:
+                            if c_c > c_o:
+                                l_wick = c_o - c_l
+                                body = c_c - c_o
+                                ratio_ok = (body >= 0.002) if (l_wick >= 0.100) else (body >= 0.003)
+                                if ratio_ok:
                                     entry = c_c
                                     init_sl = c_l
                                     sl_pct = (abs(entry - init_sl) / entry) * 100.0
@@ -743,11 +743,11 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                         })
                                         return result
                                 else:
-                                    sweep_ext = c_l
-                                    wait_cnt = 0
-                                    state = 'WAIT_BULLISH'
+                                    ext_low, ceiling, state = c_l, c_h, 'SEEK_CC'
                             else:
-                                ext_low, ceiling, state = c_l, c_h, 'SEEK_CC'
+                                sweep_ext = c_l
+                                wait_cnt = 0
+                                state = 'WAIT_BULLISH'
                     elif c_l <= ext_low:
                         sweep_ext = c_l
                         wait_cnt = 0
