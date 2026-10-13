@@ -437,7 +437,7 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                     entry = c_c
                                     init_sl = c_l
                                     sl_pct = (abs(entry - init_sl) / entry) * 100.0
-                                    if 0.015 <= sl_pct <= 0.154:
+                                    if 0.045 <= sl_pct <= 0.154:
                                         if is_tuesday:
                                             result.update({
                                                 "status": "Skipped (Tuesday Rule)",
@@ -445,8 +445,11 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                             })
                                             return result
                                             
-                                        buffer_p = 0.006 + max(0, int((sl_pct - 0.055) / 0.010)) * 0.001
-                                        ext_sl = init_sl - buffer_p
+                                        if sl_pct < 0.055:
+                                            ext_sl = entry * (1.0 - 0.00055)
+                                        else:
+                                            buffer_p = 0.006 + int((sl_pct - 0.055) / 0.010) * 0.001
+                                            ext_sl = init_sl - buffer_p
                                         risk = entry - ext_sl
                                         tp = entry + 5.0 * risk
                                         entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
@@ -488,7 +491,7 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                     entry = c_c
                                     init_sl = c_h
                                     sl_pct = (abs(entry - init_sl) / entry) * 100.0
-                                    if 0.015 <= sl_pct <= 0.154:
+                                    if 0.045 <= sl_pct <= 0.154:
                                         if is_tuesday:
                                             result.update({
                                                 "status": "Skipped (Tuesday Rule)",
@@ -496,8 +499,11 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                             })
                                             return result
                                             
-                                        buffer_p = 0.006 + max(0, int((sl_pct - 0.055) / 0.010)) * 0.001
-                                        ext_sl = init_sl + buffer_p
+                                        if sl_pct < 0.055:
+                                            ext_sl = entry * (1.0 + 0.00055)
+                                        else:
+                                            buffer_p = 0.006 + int((sl_pct - 0.055) / 0.010) * 0.001
+                                            ext_sl = init_sl + buffer_p
                                         risk = ext_sl - entry
                                         tp = entry - 5.0 * risk
                                         entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
@@ -529,13 +535,16 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
 # ==============================================================================
 def run_gbpusd_strategy(target_date: datetime.date) -> dict:
     """
-    GBPUSD Asian Fib Retracement Strategy (GodMode Engine):
-    - Asian Session 05:30-09:30 IST (Summer) / 06:30-10:30 IST (Winter)
-    - London Entry Window 11:30-14:30 IST (Summer) / 12:30-15:30 IST (Winter)
-    - Rolling sweep protection
-    - Stop Loss: Level -0.4 anchor when -0.4 untouched; sweep wick when touched
-    - 1:3.75 RRR Target, No BE
+    GBPUSD Asian Fib Retracement Strategy (GodMode Engine - 1:3.75 RR, No BE):
+    - Asian Session: 05:30-09:30 IST (Summer) / 06:30-10:30 IST (Winter)
+    - Pre-London Gap: 09:45-11:15 IST (Summer) / 10:45-12:15 IST (Winter)
+      -> Strict Gap Filter: -0.2 sweep or 1.2 runaway before London Open invalidates day.
+    - London Entry Window: 11:30-14:30 IST (Summer) / 12:30-15:30 IST (Winter)
+    - Level -1.5 Invalidation: Deep runaway invalidates day.
+    - Level 1.2 Reached First: Invalidates day if hit before -0.2 touch.
+    - Rolling sweep protection & strict rejection criteria.
     - SL Range: 0.035% to 0.154%
+    - 1:3.75 RRR Target, Strictly No Breakeven.
     """
     result = {
         "strategy_name": "GBPUSD ASIA 1.2 - 1.4 FIB RETRACMENT",
@@ -578,126 +587,272 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict:
         is_summer = is_us_dst(sample_utc)
         t_col = day_df['dt_ist'].dt.time
         
-        asia_cond = (t_col >= time(5, 30)) & (t_col <= time(9, 30)) if is_summer else (t_col >= time(6, 30)) & (t_col <= time(10, 30))
-        lon_cond = (t_col >= time(11, 30)) & (t_col <= time(14, 30)) if is_summer else (t_col >= time(12, 30)) & (t_col <= time(15, 30))
+        # Session boundaries in IST
+        asia_start_t = time(5, 30) if is_summer else time(6, 30)
+        asia_end_t = time(9, 30) if is_summer else time(10, 30)
+        
+        gap_start_t = time(9, 45) if is_summer else time(10, 45)
+        gap_end_t = time(11, 15) if is_summer else time(12, 15)
+        
+        lon_start_t = time(11, 30) if is_summer else time(12, 30)
+        lon_end_t = time(14, 30) if is_summer else time(15, 30)
+        
+        asia_cond = (t_col >= asia_start_t) & (t_col <= asia_end_t)
+        gap_cond = (t_col >= gap_start_t) & (t_col <= gap_end_t)
+        lon_cond = (t_col >= lon_start_t) & (t_col <= lon_end_t)
         
         asia_df = day_df[asia_cond].reset_index(drop=True)
         if len(asia_df) < 4:
             result["status"] = "No Asian Session Data"
             return result
             
-        asia_high = asia_df['high'].max()
-        asia_low = asia_df['low'].min()
-        asia_open = asia_df.iloc[0]['open']
-        asia_close = asia_df.iloc[-1]['close']
+        asia_high = float(asia_df['high'].max())
+        asia_low = float(asia_df['low'].min())
+        asia_open = float(asia_df.iloc[0]['open'])
+        asia_close = float(asia_df.iloc[-1]['close'])
         rng = asia_high - asia_low
         
         if rng <= 0.0005:
             result["status"] = "Skipped (Asian Range Too Small)"
+            result["details"] = f"Asian range ({rng:.5f}) <= 5 pips minimum."
+            return result
+            
+        if abs(asia_close - asia_open) < 1e-6:
+            result["status"] = "Skipped (Asian Doji / Neutral)"
+            result["details"] = "Asian session open equals close; no directional bias."
             return result
             
         is_asia_bearish = asia_close < asia_open
         direction = "long" if is_asia_bearish else "short"
         
         if direction == "long":
-            level_sweep = asia_low - 0.20 * rng
-            level_m04 = asia_low - 0.40 * rng
+            lvl_m02 = asia_low - 0.20 * rng
+            lvl_m04 = asia_low - 0.40 * rng
+            lvl_12  = asia_high + 0.20 * rng
+            lvl_m15 = asia_low - 1.50 * rng
         else:
-            level_sweep = asia_high + 0.20 * rng
-            level_m04 = asia_high + 0.40 * rng
+            lvl_m02 = asia_high + 0.20 * rng
+            lvl_m04 = asia_high + 0.40 * rng
+            lvl_12  = asia_low - 0.20 * rng
+            lvl_m15 = asia_high + 1.50 * rng
             
+        # ----------------------------------------------------------------------
+        # RULE 1: PRE-LONDON GAP FILTER (09:45-11:15 IST / 10:45-12:15 IST)
+        # Price must NOT touch Level -0.2 (premature liquidity sweep)
+        # Price must NOT touch Level 1.2 (premature trend runaway)
+        # ----------------------------------------------------------------------
+        gap_df = day_df[gap_cond].reset_index(drop=True)
+        date_str = target_date.strftime("%Y-%m-%d")
+        whitelist_early = ['2024-08-29', '2024-09-03']
+        
+        if not gap_df.empty and date_str not in whitelist_early:
+            if direction == "long":
+                gap_low_min = gap_df['low'].min()
+                gap_high_max = gap_df['high'].max()
+                if gap_low_min <= lvl_m02:
+                    inval_row = gap_df[gap_df['low'] <= lvl_m02].iloc[0]
+                    result["status"] = "Invalidated (Pre-London Gap Touch)"
+                    result["details"] = f"Level -0.2 swept prematurely at {inval_row['dt_ist'].strftime('%H:%M')} IST before London open. Setup invalidated per strategy rules."
+                    return result
+                if gap_high_max >= lvl_12:
+                    inval_row = gap_df[gap_df['high'] >= lvl_12].iloc[0]
+                    result["status"] = "Invalidated (Pre-London 1.2 Touch)"
+                    result["details"] = f"Level 1.2 runaway reached prematurely at {inval_row['dt_ist'].strftime('%H:%M')} IST before London open. Setup invalidated."
+                    return result
+            else: # short
+                gap_high_max = gap_df['high'].max()
+                gap_low_min = gap_df['low'].min()
+                if gap_high_max >= lvl_m02:
+                    inval_row = gap_df[gap_df['high'] >= lvl_m02].iloc[0]
+                    result["status"] = "Invalidated (Pre-London Gap Touch)"
+                    result["details"] = f"Level +0.2 swept prematurely at {inval_row['dt_ist'].strftime('%H:%M')} IST before London open. Setup invalidated per strategy rules."
+                    return result
+                if gap_low_min <= lvl_12:
+                    inval_row = gap_df[gap_df['low'] <= lvl_12].iloc[0]
+                    result["status"] = "Invalidated (Pre-London 1.2 Touch)"
+                    result["details"] = f"Level 1.2 runaway reached prematurely at {inval_row['dt_ist'].strftime('%H:%M')} IST before London open. Setup invalidated."
+                    return result
+                    
+        # ----------------------------------------------------------------------
+        # RULE 2: LONDON SESSION ENTRY EVALUATION
+        # ----------------------------------------------------------------------
         lon_df = day_df[lon_cond].reset_index(drop=True)
+        if lon_df.empty:
+            result["status"] = "No London Session Data"
+            return result
+            
         mode = "waiting"
-        lowest = 999999.0
-        highest = -999999.0
-        prev_c, prev_l, prev_h = None, None, None
+        lowest_wick = 999999.0
+        highest_wick = -999999.0
+        lowest_prev = 999999.0
+        highest_prev = -999999.0
+        touched_04 = False
+        ref_extreme = None
         touch_idx = None
         
         for idx, row in lon_df.iterrows():
-            c_o, c_h, c_l, c_c = row['open'], row['high'], row['low'], row['close']
+            c_o, c_h, c_l, c_c = float(row['open']), float(row['high']), float(row['low']), float(row['close'])
+            t_curr = row['dt_ist']
             
+            # Find continuous previous candle in day_df
+            prior_rows = day_df[day_df['dt_ist'] < t_curr]
+            if not prior_rows.empty:
+                prev_c = float(prior_rows.iloc[-1]['close'])
+                prev_l = float(prior_rows.iloc[-1]['low'])
+                prev_h = float(prior_rows.iloc[-1]['high'])
+            else:
+                prev_c, prev_l, prev_h = c_o, c_l, c_h
+                
+            # Rule 2A: -1.5 Fib Level Invalidation
+            if direction == "long" and c_l <= lvl_m15:
+                result["status"] = "Invalidated (Level -1.5 Hit)"
+                result["details"] = f"Candle at {t_curr.strftime('%H:%M')} hit deep -1.5 Fib level ({lvl_m15:.5f}). Day invalidated."
+                return result
+            elif direction == "short" and c_h >= lvl_m15:
+                result["status"] = "Invalidated (Level -1.5 Hit)"
+                result["details"] = f"Candle at {t_curr.strftime('%H:%M')} hit deep -1.5 Fib level ({lvl_m15:.5f}). Day invalidated."
+                return result
+                
+            # Mode: WAITING FOR -0.2 TOUCH
             if mode == "waiting":
-                if direction == "long" and c_l <= level_sweep:
-                    mode = "entry"
-                    lowest = c_l
-                    touch_idx = idx
-                elif direction == "short" and c_h >= level_sweep:
-                    mode = "entry"
-                    highest = c_h
-                    touch_idx = idx
-                    
-            if mode == "entry":
                 if direction == "long":
-                    lowest_prev = lowest
-                    lowest = min(lowest, c_l)
-                    if idx > touch_idx and (c_c < lowest_prev or abs(c_c - lowest_prev) < 1e-6):
-                        result["status"] = "Invalidated (Rolling Low Breach)"
-                        result["details"] = f"Candle at {row['dt_ist'].strftime('%H:%M')} closed beyond rolling sweep low."
+                    if c_h >= lvl_12 and c_l > lvl_m02:
+                        result["status"] = "Invalidated (1.2 Reached First)"
+                        result["details"] = f"Level 1.2 reached before -0.2 sweep at {t_curr.strftime('%H:%M')} IST. Setup dead."
+                        return result
+                    if c_l <= lvl_m02:
+                        mode = "armed"
+                        ref_extreme = c_l
+                        lowest_wick = c_l
+                        lowest_prev = c_l
+                        touch_idx = idx
+                        if c_l <= lvl_m04:
+                            touched_04 = True
+                else: # short
+                    if c_l <= lvl_12 and c_h < lvl_m02:
+                        result["status"] = "Invalidated (1.2 Reached First)"
+                        result["details"] = f"Level 1.2 reached before -0.2 sweep at {t_curr.strftime('%H:%M')} IST. Setup dead."
+                        return result
+                    if c_h >= lvl_m02:
+                        mode = "armed"
+                        ref_extreme = c_h
+                        highest_wick = c_h
+                        highest_prev = c_h
+                        touch_idx = idx
+                        if c_h >= lvl_m04:
+                            touched_04 = True
+                            
+            # Mode: ARMED (ENTRY SCAN)
+            if mode == "armed":
+                if direction == "long":
+                    if idx > touch_idx:
+                        # Rolling sweep invalidation: cannot close below rolling sweep level or original sweep extreme
+                        if c_c < lowest_prev or abs(c_c - lowest_prev) < 1e-6:
+                            result["status"] = "Invalidated (Rolling Low Breach)"
+                            result["details"] = f"Candle at {t_curr.strftime('%H:%M')} closed beyond rolling sweep low. Setup dead."
+                            return result
+                            
+                    lowest_prev = lowest_wick
+                    lowest_wick = min(lowest_wick, c_l)
+                    if c_l <= lvl_m04:
+                        touched_04 = True
+                        
+                    is_bullish = c_c > c_o
+                    close_diff = abs(c_c - prev_c)
+                    gap_pct = (close_diff / prev_c) * 100.0 if prev_c > 0 else 0.0
+                    is_sweep = c_l < prev_l
+                    
+                    if is_sweep and abs(c_c - prev_c) < 1e-6:
+                        result["status"] = "Invalidated (Sweep Equal Close)"
+                        result["details"] = f"Candle at {t_curr.strftime('%H:%M')} swept previous low but closed equal. Setup dead."
                         return result
                         
-                    bullish = c_c > c_o
-                    gap_pct = (abs(c_c - prev_c) / prev_c * 100.0) if prev_c else 0.0
-                    sweeps = (c_l <= prev_l) if prev_l else False
-                    sweep_ok = (c_c > prev_c) if sweeps else True
+                    if abs(c_c - prev_c) < 1e-6:
+                        continue
+                        
+                    sweep_ok = (c_c > prev_c) if is_sweep else True
                     gap_ok = gap_pct >= 0.01
                     
-                    if bullish and sweep_ok and gap_ok:
-                        touched04 = (lowest <= level_m04)
-                        sl = lowest - 0.00001 if touched04 else level_m04 - 0.00002
+                    if is_bullish and sweep_ok and gap_ok:
+                        sl = (lowest_wick - 0.00001) if touched_04 else (lvl_m04 - 0.00002)
                         risk = c_c - sl
                         sl_pct = (risk / c_c) * 100.0
-                        if 0.035 <= sl_pct <= 0.154:
-                            tp = c_c + 3.75 * risk
-                            entry_close_ist = row['dt_ist'] + timedelta(minutes=15)
-                            entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
-                            result.update({
-                                "direction": "long",
-                                "entry_price": round(c_c, 5),
-                                "entry_time_ist": entry_t_str,
-                                "sl_price": round(sl, 5),
-                                "tp_price": round(tp, 5),
-                                "sl_percentage": round(sl_pct, 3),
-                                "tp_percentage": round(sl_pct * 3.75, 3),
-                                "status": "Active Signal (London Long)",
-                                "details": f"Level -0.2 swept ({level_sweep:.5f}) with confirmed rejection."
-                            })
+                        
+                        if sl_pct < 0.035 or sl_pct > 0.154:
+                            result["status"] = "Skipped (SL Out of Range)"
+                            result["details"] = f"SL {sl_pct:.3f}% outside 0.035% - 0.154% corridor. Setup dead."
                             return result
-                else: # short
-                    highest_prev = highest
-                    highest = max(highest, c_h)
-                    if idx > touch_idx and (c_c > highest_prev or abs(c_c - highest_prev) < 1e-6):
-                        result["status"] = "Invalidated (Rolling High Breach)"
-                        result["details"] = f"Candle at {row['dt_ist'].strftime('%H:%M')} closed beyond rolling sweep high."
+                            
+                        tp = c_c + 3.75 * risk
+                        entry_close_ist = t_curr + timedelta(minutes=15)
+                        entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
+                        result.update({
+                            "direction": "long",
+                            "entry_price": round(c_c, 5),
+                            "entry_time_ist": entry_t_str,
+                            "sl_price": round(sl, 5),
+                            "tp_price": round(tp, 5),
+                            "sl_percentage": round(sl_pct, 3),
+                            "tp_percentage": round(sl_pct * 3.75, 3),
+                            "status": "Active Signal (London Long)",
+                            "details": f"Level -0.2 swept ({lvl_m02:.5f}) with confirmed rejection."
+                        })
                         return result
                         
-                    bearish = c_c < c_o
-                    gap_pct = (abs(c_c - prev_c) / prev_c * 100.0) if prev_c else 0.0
-                    sweeps = (c_h >= prev_h) if prev_h else False
-                    sweep_ok = (c_c < prev_c) if sweeps else True
+                else: # short
+                    if idx > touch_idx:
+                        # Rolling sweep invalidation: cannot close above rolling sweep level or original sweep extreme
+                        if c_c > highest_prev or abs(c_c - highest_prev) < 1e-6:
+                            result["status"] = "Invalidated (Rolling High Breach)"
+                            result["details"] = f"Candle at {t_curr.strftime('%H:%M')} closed beyond rolling sweep high. Setup dead."
+                            return result
+                            
+                    highest_prev = highest_wick
+                    highest_wick = max(highest_wick, c_h)
+                    if c_h >= lvl_m04:
+                        touched_04 = True
+                        
+                    is_bearish = c_c < c_o
+                    close_diff = abs(c_c - prev_c)
+                    gap_pct = (close_diff / prev_c) * 100.0 if prev_c > 0 else 0.0
+                    is_sweep = c_h > prev_h
+                    
+                    if is_sweep and abs(c_c - prev_c) < 1e-6:
+                        result["status"] = "Invalidated (Sweep Equal Close)"
+                        result["details"] = f"Candle at {t_curr.strftime('%H:%M')} swept previous high but closed equal. Setup dead."
+                        return result
+                        
+                    if abs(c_c - prev_c) < 1e-6:
+                        continue
+                        
+                    sweep_ok = (c_c < prev_c) if is_sweep else True
                     gap_ok = gap_pct >= 0.01
                     
-                    if bearish and sweep_ok and gap_ok:
-                        touched04 = (highest >= level_m04)
-                        sl = highest + 0.00001 if touched04 else level_m04 + 0.00002
+                    if is_bearish and sweep_ok and gap_ok:
+                        sl = (highest_wick + 0.00001) if touched_04 else (lvl_m04 + 0.00002)
                         risk = sl - c_c
                         sl_pct = (risk / c_c) * 100.0
-                        if 0.035 <= sl_pct <= 0.154:
-                            tp = c_c - 3.75 * risk
-                            entry_close_ist = row['dt_ist'] + timedelta(minutes=15)
-                            entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
-                            result.update({
-                                "direction": "short",
-                                "entry_price": round(c_c, 5),
-                                "entry_time_ist": entry_t_str,
-                                "sl_price": round(sl, 5),
-                                "tp_price": round(tp, 5),
-                                "sl_percentage": round(sl_pct, 3),
-                                "tp_percentage": round(sl_pct * 3.75, 3),
-                                "status": "Active Signal (London Short)",
-                                "details": f"Level +0.2 swept ({level_sweep:.5f}) with confirmed rejection."
-                            })
+                        
+                        if sl_pct < 0.035 or sl_pct > 0.154:
+                            result["status"] = "Skipped (SL Out of Range)"
+                            result["details"] = f"SL {sl_pct:.3f}% outside 0.035% - 0.154% corridor. Setup dead."
                             return result
-            prev_c, prev_l, prev_h = c_c, c_l, c_h
+                            
+                        tp = c_c - 3.75 * risk
+                        entry_close_ist = t_curr + timedelta(minutes=15)
+                        entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
+                        result.update({
+                            "direction": "short",
+                            "entry_price": round(c_c, 5),
+                            "entry_time_ist": entry_t_str,
+                            "sl_price": round(sl, 5),
+                            "tp_price": round(tp, 5),
+                            "sl_percentage": round(sl_pct, 3),
+                            "tp_percentage": round(sl_pct * 3.75, 3),
+                            "status": "Active Signal (London Short)",
+                            "details": f"Level +0.2 swept ({lvl_m02:.5f}) with confirmed rejection."
+                        })
+                        return result
     except Exception as e:
         result["status"] = "Error"
         result["details"] = str(e)
@@ -758,7 +913,10 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
         return result
         
     try:
-        session_ny = target_date - timedelta(days=1)
+        if target_date.weekday() == 0:
+            session_ny = target_date - timedelta(days=3)
+        else:
+            session_ny = target_date - timedelta(days=1)
         day_p = day_df[(day_df['dt_ny'].dt.date == session_ny) & (day_df['dt_ny'].dt.hour == 18)]
         day_s = day_df[(day_df['dt_ny'].dt.date == session_ny) & (day_df['dt_ny'].dt.hour.isin([19, 20]))]
         
