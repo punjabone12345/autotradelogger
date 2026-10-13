@@ -20,6 +20,16 @@ STRAT3_ID = os.environ.get("STRAT3_ID", "6acaf24d7a78a186a5430938")  # XAUUSD 2H
 
 OANDA_TOKEN = os.environ.get("OANDA_TOKEN", "f2b74d1cee1eb5488ba8b6b067e3ffc6-b6ccbdca86ea9ddb162f03996341ae91")
 
+# Fixed broker & exchange fees per trade:
+# XAUUSD: $25.00 per trade
+# GBPUSD: $40.00 per trade
+# USDJPY: $40.00 per trade
+FIXED_FEES = {
+    "XAUUSD": 25.0,
+    "GBPUSD": 40.0,
+    "USDJPY": 40.0
+}
+
 # ==============================================================================
 # FASTAPI APPLICATION SETUP
 # ==============================================================================
@@ -39,7 +49,9 @@ app.add_middleware(
 
 class RunRequest(BaseModel):
     date: Optional[str] = None
-    amount: Optional[float] = 1.0
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    amount: Optional[float] = 300.0
     fees: Optional[float] = 40.0
 
 # ==============================================================================
@@ -57,14 +69,14 @@ def is_us_dst(dt_utc: datetime.datetime) -> bool:
     return dst_start <= dt_utc < dst_end
 
 # ==============================================================================
-# OANDA MARKET DATA PROVIDER
+# OANDA MARKET DATA PROVIDER & LIVE HELPERS
 # ==============================================================================
 def fetch_oanda_candles(instrument: str, granularity: str, target_date: datetime.date) -> pd.DataFrame:
     """Fetches real-time M15 candlesticks from OANDA API with IST conversion."""
     if not OANDA_TOKEN:
         return pd.DataFrame()
         
-    base_url = "https://api-fxtrade.oanda.com/v3"
+    base_urls = ["https://api-fxtrade.oanda.com/v3", "https://api-fxpractice.oanda.com/v3"]
     headers = {"Authorization": f"Bearer {OANDA_TOKEN}"}
     start_utc = dt(target_date.year, target_date.month, target_date.day, 0, 0, 0, tzinfo=timezone.utc) - timedelta(days=1)
     now_utc = dt.now(timezone.utc)
@@ -78,36 +90,261 @@ def fetch_oanda_candles(instrument: str, granularity: str, target_date: datetime
     if target_end_utc < now_utc:
         params["to"] = target_end_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
         
-    try:
-        url = f"{base_url}/instruments/{instrument}/candles"
-        r = requests.get(url, headers=headers, params=params, timeout=12)
-        if r.status_code != 200:
-            # Fallback to demo practice endpoint if live returns 401/403
-            url = f"https://api-fxpractice.oanda.com/v3/instruments/{instrument}/candles"
+    for base_url in base_urls:
+        try:
+            url = f"{base_url}/instruments/{instrument}/candles"
             r = requests.get(url, headers=headers, params=params, timeout=12)
-            
-        if r.status_code == 200:
-            raw_candles = r.json().get("candles", [])
-            records = []
-            for c in raw_candles:
-                t_str = c["time"][:19] + "Z"
-                t_utc = dt.strptime(t_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-                records.append({
-                    "time_utc": t_utc,
-                    "open": float(c["mid"]["o"]),
-                    "high": float(c["mid"]["h"]),
-                    "low": float(c["mid"]["l"]),
-                    "close": float(c["mid"]["c"]),
-                    "complete": c.get("complete", True)
-                })
-            df = pd.DataFrame(records)
-            if not df.empty:
-                df["dt_ist"] = df["time_utc"].apply(lambda t: t.astimezone(timezone(timedelta(hours=5, minutes=30))))
-                df["dt_ny"] = df["time_utc"].apply(lambda t: t.astimezone(timezone(timedelta(hours=-4 if is_us_dst(t) else -5))))
-                return df
-    except Exception as e:
-        print(f"OANDA API fetch error for {instrument}: {e}")
+            if r.status_code == 200:
+                raw_candles = r.json().get("candles", [])
+                records = []
+                for c in raw_candles:
+                    t_str = c["time"][:19] + "Z"
+                    t_utc = dt.strptime(t_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                    records.append({
+                        "time_utc": t_utc,
+                        "open": float(c["mid"]["o"]),
+                        "high": float(c["mid"]["h"]),
+                        "low": float(c["mid"]["l"]),
+                        "close": float(c["mid"]["c"]),
+                        "complete": c.get("complete", True)
+                    })
+                df = pd.DataFrame(records)
+                if not df.empty:
+                    df["dt_ist"] = df["time_utc"].apply(lambda t: t.astimezone(timezone(timedelta(hours=5, minutes=30))))
+                    df["dt_ny"] = df["time_utc"].apply(lambda t: t.astimezone(timezone(timedelta(hours=-4 if is_us_dst(t) else -5))))
+                    return df
+        except Exception:
+            continue
     return pd.DataFrame()
+
+def get_latest_market_price(symbol: str) -> float:
+    """Fetches real-time market price for symbol from OANDA."""
+    inst = "USD_JPY" if "JPY" in symbol else ("GBP_USD" if "GBP" in symbol else "XAU_USD")
+    if not OANDA_TOKEN:
+        return 0.0
+    for base_url in ["https://api-fxtrade.oanda.com/v3", "https://api-fxpractice.oanda.com/v3"]:
+        try:
+            url = f"{base_url}/instruments/{inst}/candles"
+            r = requests.get(url, headers={"Authorization": f"Bearer {OANDA_TOKEN}"}, params={"count": 1, "price": "M", "granularity": "M1"}, timeout=5)
+            if r.status_code == 200:
+                c_list = r.json().get("candles", [])
+                if c_list:
+                    return float(c_list[-1]["mid"]["c"])
+        except Exception:
+            pass
+    return 0.0
+
+def fetch_m1_exit_time(instrument: str, start_dt_utc: datetime.datetime, end_dt_utc: datetime.datetime, 
+                        direction: str, sl_price: float, tp_price: float) -> Optional[str]:
+    """
+    Scans 1-minute (M1) candles between entry time and exit candle to find the exact minute
+    and candle close timestamp when Stop Loss or Take Profit was triggered in IST.
+    """
+    if not OANDA_TOKEN:
+        return None
+    headers = {"Authorization": f"Bearer {OANDA_TOKEN}"}
+    
+    for base_url in ["https://api-fxtrade.oanda.com/v3", "https://api-fxpractice.oanda.com/v3"]:
+        cur_from = start_dt_utc
+        success = False
+        while cur_from < end_dt_utc:
+            params = {
+                "granularity": "M1",
+                "price": "M",
+                "from": cur_from.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "count": 500
+            }
+            try:
+                url = f"{base_url}/instruments/{instrument}/candles"
+                r = requests.get(url, headers=headers, params=params, timeout=8)
+                if r.status_code != 200:
+                    break
+                raw_candles = r.json().get("candles", [])
+                if not raw_candles:
+                    break
+                success = True
+                for c in raw_candles:
+                    t_str = c["time"][:19] + "Z"
+                    t_utc = dt.strptime(t_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                    if t_utc > end_dt_utc:
+                        return None
+                    c_high = float(c["mid"]["h"])
+                    c_low = float(c["mid"]["l"])
+                    hit = False
+                    if direction == "long":
+                        if c_low <= sl_price or c_high >= tp_price:
+                            hit = True
+                    elif direction == "short":
+                        if c_high >= sl_price or c_low <= tp_price:
+                            hit = True
+                    if hit:
+                        t_close_utc = t_utc + timedelta(minutes=1)
+                        t_close_ist = t_close_utc.astimezone(timezone(timedelta(hours=5, minutes=30)))
+                        return t_close_ist.strftime("%Y-%m-%dT%H:%M")
+                last_t = dt.strptime(raw_candles[-1]["time"][:19] + "Z", "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                if last_t <= cur_from or len(raw_candles) < 500:
+                    break
+                cur_from = last_t + timedelta(minutes=1)
+            except Exception:
+                break
+        if success:
+            break
+    return None
+
+# ==============================================================================
+# POSITION SIZING & FEES LOGIC
+# ==============================================================================
+def calculate_risk_quantity(symbol: str, entry_price: float, sl_price: float, risk_usd: float = 300.0) -> float:
+    """
+    Calculates exact risk-based position size to risk precisely risk_usd on Stop Loss:
+    Quantity = Risk ($300 default) / |entry_price - sl_price|
+    - XAUUSD: Rounded to 1 decimal place (ounces).
+    - GBPUSD & USDJPY: Rounded to whole units.
+    """
+    diff = abs(entry_price - sl_price)
+    if diff <= 0:
+        return 1.0
+    qty = risk_usd / diff
+    if "XAU" in symbol.upper():
+        return round(qty, 1)
+    else:
+        return round(qty, 0)
+
+def get_trade_fee(symbol: str, user_fee: Optional[float] = None) -> float:
+    """Returns fixed fee per trade ($25 for XAUUSD, $40 for GBPUSD, $40 for USDJPY), or custom if explicitly set."""
+    if user_fee is not None and user_fee > 0 and user_fee != 40.0:
+        return float(user_fee)
+    s = str(symbol).upper()
+    if "XAU" in s:
+        return FIXED_FEES["XAUUSD"]
+    elif "GBP" in s:
+        return FIXED_FEES["GBPUSD"]
+    elif "JPY" in s:
+        return FIXED_FEES["USDJPY"]
+    return float(user_fee or 40.0)
+
+# ==============================================================================
+# TRADE LIFECYCLE EVALUATOR (M1 PRECISION & LIVE OUTCOMES)
+# ==============================================================================
+def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_override: Optional[float] = None) -> dict:
+    """
+    Evaluates whether trade hit TP, SL, or is currently OPEN.
+    Uses precise 1-minute (M1) candles for exact exit timing down to the minute in IST.
+    Format: YYYY-MM-DDTHH:MM (Exact Indian Standard Time)
+    """
+    symbol = trade_info["symbol"]
+    direction = trade_info["direction"].lower()
+    entry_price = float(trade_info["entry_price"])
+    sl_price = float(trade_info["sl_price"])
+    tp_price = float(trade_info["tp_price"])
+    
+    trade_date = trade_info.get("date")
+    if isinstance(trade_date, str):
+        try:
+            trade_date = dt.strptime(trade_date[:10], "%Y-%m-%d").date()
+        except Exception:
+            trade_date = datetime.date.today()
+    elif not trade_date:
+        trade_date = datetime.date.today()
+        
+    entry_time_str = trade_info.get("entry_time_ist")
+    quantity = calculate_risk_quantity(symbol, entry_price, sl_price, risk_usd=risk_usd)
+    inst = "USD_JPY" if "JPY" in symbol else ("GBP_USD" if "GBP" in symbol else "XAU_USD")
+    candles_df = fetch_oanda_candles(inst, "M15", trade_date)
+    
+    status = "open"
+    exit_price = get_latest_market_price(symbol)
+    exit_time_str = None
+    
+    if not candles_df.empty:
+        if not entry_time_str:
+            if symbol == "GBPUSD":
+                entry_time_str = f"{trade_date.strftime('%Y-%m-%d')}T12:15"
+            elif symbol == "XAUUSD":
+                entry_time_str = f"{trade_date.strftime('%Y-%m-%d')}T06:30"
+            elif symbol == "USDJPY":
+                entry_time_str = f"{trade_date.strftime('%Y-%m-%d')}T13:30"
+            else:
+                entry_time_str = f"{trade_date.strftime('%Y-%m-%d')}T12:00"
+
+        try:
+            e_dt = dt.strptime(entry_time_str, "%Y-%m-%dT%H:%M")
+            e_time = e_dt.time()
+        except Exception:
+            e_time = time(6, 30) if symbol == "XAUUSD" else time(12, 15)
+            
+        sub_df = candles_df[(candles_df['dt_ist'].dt.date >= trade_date) & 
+                            ((candles_df['dt_ist'].dt.date > trade_date) | (candles_df['dt_ist'].dt.time >= e_time))].sort_values('time_utc').reset_index(drop=True)
+            
+        for _, c in sub_df.iterrows():
+            c_high, c_low, c_dt_ist, c_time_utc = c['high'], c['low'], c['dt_ist'], c['time_utc']
+            hit_exit = False
+            
+            if direction == "long":
+                if c_low <= sl_price:
+                    status = "closed"
+                    exit_price = sl_price
+                    hit_exit = True
+                elif c_high >= tp_price:
+                    status = "closed"
+                    exit_price = tp_price
+                    hit_exit = True
+            elif direction == "short":
+                if c_high >= sl_price:
+                    status = "closed"
+                    exit_price = sl_price
+                    hit_exit = True
+                elif c_low <= tp_price:
+                    status = "closed"
+                    exit_price = tp_price
+                    hit_exit = True
+                    
+            if hit_exit:
+                try:
+                    entry_utc = dt.strptime(entry_time_str, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone(timedelta(hours=5, minutes=30))).astimezone(timezone.utc)
+                except Exception:
+                    entry_utc = c_time_utc - timedelta(hours=2)
+                m15_close_utc = c_time_utc + timedelta(minutes=15)
+                
+                m1_exit_str = fetch_m1_exit_time(inst, entry_utc, m15_close_utc, direction, sl_price, tp_price)
+                if m1_exit_str:
+                    exit_time_str = m1_exit_str
+                else:
+                    exit_time_str = (c_dt_ist + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M")
+                break
+                    
+    # If still open, populate with current live IST timestamp and live market price
+    if status == "open":
+        now_ist = dt.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        exit_time_str = now_ist.strftime("%Y-%m-%dT%H:%M")
+        live_price = get_latest_market_price(symbol)
+        if live_price > 0:
+            exit_price = live_price
+        elif not candles_df.empty:
+            exit_price = candles_df.iloc[-1]['close']
+        else:
+            exit_price = entry_price
+            
+    # Calculate exact net P&L after deducting fixed broker fee
+    fee = get_trade_fee(symbol, fee_override)
+    if direction == "long":
+        gross_pnl = (exit_price - entry_price) * quantity
+    else:
+        gross_pnl = (entry_price - exit_price) * quantity
+        
+    net_pnl = gross_pnl - fee
+    decimals = 5 if "GBP" in symbol else (3 if "JPY" in symbol else 2)
+        
+    return {
+        "status": status,
+        "entry_time_str": entry_time_str,
+        "exit_price": round(exit_price, decimals),
+        "exit_time_str": exit_time_str,
+        "quantity": quantity,
+        "gross_pnl": round(gross_pnl, 2),
+        "fee": fee,
+        "net_pnl": round(net_pnl, 2)
+    }
 
 # ==============================================================================
 # STRATEGY 1: USDJPY SELFSWEEP
@@ -127,6 +364,7 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
         "date": target_date.strftime("%Y-%m-%d"),
         "direction": "none",
         "entry_price": 0.0,
+        "entry_time_ist": None,
         "sl_price": 0.0,
         "tp_price": 0.0,
         "sl_percentage": 0.0,
@@ -211,9 +449,12 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                         ext_sl = init_sl - buffer_p
                                         risk = entry - ext_sl
                                         tp = entry + 5.0 * risk
+                                        entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
+                                        entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
                                         result.update({
                                             "direction": "long",
                                             "entry_price": round(entry, 3),
+                                            "entry_time_ist": entry_t_str,
                                             "sl_price": round(ext_sl, 3),
                                             "tp_price": round(tp, 3),
                                             "sl_percentage": round(sl_pct, 3),
@@ -259,9 +500,12 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                         ext_sl = init_sl + buffer_p
                                         risk = ext_sl - entry
                                         tp = entry - 5.0 * risk
+                                        entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
+                                        entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
                                         result.update({
                                             "direction": "short",
                                             "entry_price": round(entry, 3),
+                                            "entry_time_ist": entry_t_str,
                                             "sl_price": round(ext_sl, 3),
                                             "tp_price": round(tp, 3),
                                             "sl_percentage": round(sl_pct, 3),
@@ -300,6 +544,7 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict:
         "date": target_date.strftime("%Y-%m-%d"),
         "direction": "none",
         "entry_price": 0.0,
+        "entry_time_ist": None,
         "sl_price": 0.0,
         "tp_price": 0.0,
         "sl_percentage": 0.0,
@@ -319,15 +564,13 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict:
         csv_file = "GBPUSD_2YEARS.csv"
         if os.path.exists(csv_file):
             df = pd.read_csv(csv_file)
-            df.columns = [c.strip().lower() for c in df.columns]
-            time_col = 'time' if 'time' in df.columns else ('timestamp' if 'timestamp' in df.columns else df.columns[0])
-            df['dt_ist'] = pd.to_datetime(df[time_col])
+            df['dt_ist'] = pd.to_datetime(df['time_ist'])
             day_df = df[df['dt_ist'].dt.date == target_date].sort_values('dt_ist').reset_index(drop=True)
             result["data_source"] = "Local Archive CSV"
             
-    if day_df.empty or len(day_df) < 12:
+    if day_df.empty or len(day_df) < 8:
         result["status"] = "No Session Data"
-        result["details"] = f"Insufficient M15 candles for {target_date}."
+        result["details"] = f"Insufficient M15 candles available for {target_date}."
         return result
         
     try:
@@ -335,17 +578,12 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict:
         is_summer = is_us_dst(sample_utc)
         t_col = day_df['dt_ist'].dt.time
         
-        if is_summer:
-            asia_cond = (t_col >= time(5, 30)) & (t_col <= time(9, 30))
-            lon_cond = (t_col >= time(11, 30)) & (t_col <= time(14, 30))
-        else:
-            asia_cond = (t_col >= time(6, 30)) & (t_col <= time(10, 30))
-            lon_cond = (t_col >= time(12, 30)) & (t_col <= time(15, 30))
-            
-        asia_df = day_df[asia_cond]
+        asia_cond = (t_col >= time(5, 30)) & (t_col <= time(9, 30)) if is_summer else (t_col >= time(6, 30)) & (t_col <= time(10, 30))
+        lon_cond = (t_col >= time(11, 30)) & (t_col <= time(14, 30)) if is_summer else (t_col >= time(12, 30)) & (t_col <= time(15, 30))
+        
+        asia_df = day_df[asia_cond].reset_index(drop=True)
         if len(asia_df) < 4:
-            result["status"] = "No Asia Range"
-            result["details"] = "Asian range incomplete."
+            result["status"] = "No Asian Session Data"
             return result
             
         asia_high = asia_df['high'].max()
@@ -355,8 +593,7 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict:
         rng = asia_high - asia_low
         
         if rng <= 0.0005:
-            result["status"] = "Flat Asian Range"
-            result["details"] = f"Asian range too tight: {rng:.5f}"
+            result["status"] = "Skipped (Asian Range Too Small)"
             return result
             
         is_asia_bearish = asia_close < asia_open
@@ -411,9 +648,12 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict:
                         sl_pct = (risk / c_c) * 100.0
                         if 0.035 <= sl_pct <= 0.154:
                             tp = c_c + 3.75 * risk
+                            entry_close_ist = row['dt_ist'] + timedelta(minutes=15)
+                            entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
                             result.update({
                                 "direction": "long",
                                 "entry_price": round(c_c, 5),
+                                "entry_time_ist": entry_t_str,
                                 "sl_price": round(sl, 5),
                                 "tp_price": round(tp, 5),
                                 "sl_percentage": round(sl_pct, 3),
@@ -443,9 +683,12 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict:
                         sl_pct = (risk / c_c) * 100.0
                         if 0.035 <= sl_pct <= 0.154:
                             tp = c_c - 3.75 * risk
+                            entry_close_ist = row['dt_ist'] + timedelta(minutes=15)
+                            entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
                             result.update({
                                 "direction": "short",
                                 "entry_price": round(c_c, 5),
+                                "entry_time_ist": entry_t_str,
                                 "sl_price": round(sl, 5),
                                 "tp_price": round(tp, 5),
                                 "sl_percentage": round(sl_pct, 3),
@@ -479,6 +722,7 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
         "date": target_date.strftime("%Y-%m-%d"),
         "direction": "none",
         "entry_price": 0.0,
+        "entry_time_ist": None,
         "sl_price": 0.0,
         "tp_price": 0.0,
         "sl_percentage": 0.0,
@@ -518,39 +762,29 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
         day_p = day_df[(day_df['dt_ny'].dt.date == session_ny) & (day_df['dt_ny'].dt.hour == 18)]
         day_s = day_df[(day_df['dt_ny'].dt.date == session_ny) & (day_df['dt_ny'].dt.hour.isin([19, 20]))]
         
-        if len(day_p) < 2 or len(day_s) < 4:
-            day_p = day_df[(day_df['dt_ny'].dt.date == target_date) & (day_df['dt_ny'].dt.hour == 18)]
-            day_s = day_df[(day_df['dt_ny'].dt.date == target_date) & (day_df['dt_ny'].dt.hour.isin([19, 20]))]
-            
-        if len(day_p) < 2 or len(day_s) < 4:
-            result["status"] = "No Session Data"
-            result["details"] = f"2H DOL session candles not yet complete for {target_date}."
+        if day_p.empty or day_s.empty:
+            result["status"] = "Session Incomplete"
             return result
             
-        p_high, p_low = day_p['high'].max(), day_p['low'].min()
-        s_open = day_s.iloc[0]['open']
-        s_close = day_s.iloc[-1]['close']
-        s_high, s_low = day_s['high'].max(), day_s['low'].min()
+        p_high = day_p['high'].max()
+        p_low = day_p['low'].min()
         
-        if s_open <= p_low or s_open >= p_high:
-            result["status"] = "Skipped (Invalid Open)"
-            result["details"] = "S session open was outside P session range."
-            return result
-            
-        is_bullish = s_close > s_open
-        is_bearish = s_close < s_open
+        s_high = day_s['high'].max()
+        s_low = day_s['low'].min()
+        s_close = day_s.iloc[-1]['close']
+        
         swept_high = s_high > p_high
         swept_low = s_low < p_low
         
         trade_dir = None
-        sl_raw = None
+        sl_raw = 0.0
         rule_name = ""
         
-        if s_close > p_high and is_bullish:
+        if s_close > p_high and not swept_low:
             trade_dir = "long"
             sl_raw = s_low
             rule_name = "BULL BREAKOUT CLEAN" if not swept_low else "BULL BREAKOUT SWEPT"
-        elif s_close < p_low and is_bearish:
+        elif s_close < p_low and not swept_high:
             trade_dir = "short"
             sl_raw = s_high
             rule_name = "BEAR BREAKOUT CLEAN" if not swept_high else "BEAR BREAKOUT SWEPT"
@@ -579,9 +813,16 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
             tp = entry - 3.30 * (ext_sl - entry)
             
         if 0.165 <= sl_pct <= 0.994:
+            if 'dt_ist' in day_s.columns and len(day_s) > 0:
+                entry_close_ist = day_s.iloc[-1]['dt_ist'] + timedelta(minutes=15)
+                entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
+            else:
+                entry_t_str = f"{target_date.strftime('%Y-%m-%d')}T06:30"
+                
             result.update({
                 "direction": trade_dir,
                 "entry_price": round(entry, 2),
+                "entry_time_ist": entry_t_str,
                 "sl_price": round(ext_sl, 2),
                 "tp_price": round(tp, 2),
                 "sl_percentage": round(sl_pct, 3),
@@ -600,10 +841,10 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
     return result
 
 # ==============================================================================
-# BASE44 API INTEGRATION: DUPLICATE CHECK & TRADE LOGGER
+# BASE44 API INTEGRATION: SEARCH, SYNC & OPEN TRADES TRACKER
 # ==============================================================================
-def find_existing_base44_trade(api_key: str, strategy_id: str, symbol: str, date_str: str) -> dict | None:
-    """Requirement A: Verify if trade has already been recorded in Base44."""
+def find_existing_trade(api_key: str, strategy_id: str, symbol: str, trade_date: datetime.date) -> Optional[dict]:
+    """Finds existing trade entity for strategy_id & symbol on trade_date, if already logged."""
     if not api_key:
         return None
     headers = {
@@ -616,87 +857,249 @@ def find_existing_base44_trade(api_key: str, strategy_id: str, symbol: str, date
         if resp.status_code == 200:
             data = resp.json()
             items = data.get("items", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            date_str = trade_date.isoformat()
             for item in items:
                 entry_ts = str(item.get("entry_timestamp", ""))
                 if entry_ts.startswith(date_str):
                     return item
     except Exception as e:
-        print(f"Error checking Base44 trade: {e}")
+        print(f"Error checking existing trade: {e}")
     return None
 
-def log_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict, amount: float, fees: float) -> tuple[str, str, dict]:
+def sync_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict, amount: float = 300.0, fees: Optional[float] = None) -> tuple[str, str, dict]:
     """
-    Requirement B: Log trade into Base44 Trade Journal using exact strict format:
-    payload = {
-        "strategy_id": strategy_id,
-        "symbol": symbol,
-        "direction": direction.lower(),
-        "buy_price": float(entry_price),
-        "quantity": float(amount),
-        "fees": float(fees),
-        "entry_timestamp": datetime.utcnow().isoformat() + "Z",
-        "status": "open",
-        "notes": f"{sl_percentage}% SL , {tp_percentage}% TP"
-    }
+    Logs or updates trade in Base44 Trade Journal:
+    - Calculates risk-adjusted quantity ($300 risk / amount).
+    - If closed: marks status="closed", sell_price=TP/SL, entry/exit timestamp in IST, and net_pnl.
+    - If open: marks status="open", sell_price=current market price, entry/exit timestamp in IST, and unrealized net_pnl.
+    - If already exists as open: updates via PUT.
+    - If already closed: skips as duplicate.
     """
     if not api_key:
-        return "Not Connected", "Base44 API Key not provided.", {}
-
+        return "Not Connected", "Base44 Personal Access Token not configured.", {}
+        
     symbol = trade_info["symbol"]
     direction = trade_info["direction"]
     entry_price = float(trade_info["entry_price"])
+    sl_price = float(trade_info["sl_price"])
+    tp_price = float(trade_info["tp_price"])
     sl_pct = trade_info["sl_percentage"]
     tp_pct = trade_info["tp_percentage"]
-    trade_date_str = trade_info.get("date", datetime.date.today().isoformat())
+    
+    trade_date = trade_info.get("date")
+    if isinstance(trade_date, str):
+        try:
+            trade_date = dt.strptime(trade_date[:10], "%Y-%m-%d").date()
+        except Exception:
+            trade_date = datetime.date.today()
+    elif not trade_date:
+        trade_date = datetime.date.today()
 
-    # Requirement A: Duplicate Check
-    existing = find_existing_base44_trade(api_key, strategy_id, symbol, trade_date_str)
-    if existing:
-        return "Skipped (Duplicate)", f"Trade already logged for {trade_date_str} (ID: {existing.get('id', 'N/A')}).", existing
-
-    # Requirement B: POST Payload
-    payload = {
-        "strategy_id": strategy_id,
-        "symbol": symbol,
-        "direction": direction.lower(),
-        "buy_price": float(entry_price),
-        "quantity": float(amount),
-        "fees": float(fees),
-        "entry_timestamp": dt.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "status": "open",
-        "notes": f"{sl_pct}% SL , {tp_pct}% TP"
-    }
+    lifecycle = evaluate_trade_lifecycle(trade_info, risk_usd=amount, fee_override=fees)
+    quantity = lifecycle["quantity"]
+    status = lifecycle["status"]
+    exit_price = lifecycle["exit_price"]
+    net_pnl = lifecycle["net_pnl"]
+    fee = lifecycle["fee"]
+    exit_ts_str = lifecycle["exit_time_str"]
+    entry_ts_str = lifecycle["entry_time_str"]
+    notes = f"{sl_pct}% SL ({sl_price}) , {tp_pct}% TP ({tp_price}) | Risk: ${amount:,.2f} | Fee: ${fee:,.2f}"
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
 
+    # Duplicate / Existing Trade Check
+    existing = find_existing_trade(api_key, strategy_id, symbol, trade_date)
+    if existing:
+        t_id = existing.get("id")
+        if existing.get("status") == "open":
+            put_payload = {
+                "strategy_id": strategy_id,
+                "symbol": symbol,
+                "direction": direction.lower(),
+                "buy_price": float(entry_price),
+                "sell_price": float(exit_price),
+                "quantity": float(quantity),
+                "fees": float(fee),
+                "entry_timestamp": entry_ts_str if entry_ts_str else existing.get("entry_timestamp"),
+                "exit_timestamp": exit_ts_str,
+                "status": status,
+                "net_pnl": float(net_pnl),
+                "notes": notes
+            }
+            try:
+                put_r = requests.put(f"{BASE44_API_URL}/{t_id}", headers=headers, json=put_payload, timeout=10)
+                if put_r.status_code in [200, 201]:
+                    action_label = "Closed at TP/SL" if status == "closed" else "Open (Live P&L Updated)"
+                    return "Updated", f"{action_label}: exit @ {exit_price} | Net P&L: ${net_pnl:+.2f} (Fee: ${fee:,.2f})", put_payload
+                else:
+                    return "Error", f"HTTP {put_r.status_code}: {put_r.text}", put_payload
+            except Exception as e:
+                return "Error", f"Update failed: {e}", put_payload
+        else:
+            return "Skipped (Duplicate)", f"Trade already closed @ {existing.get('sell_price')} (Net P&L: ${existing.get('net_pnl', 0):+.2f})", existing
+
+    # Create fresh record (POST)
+    payload = {
+        "strategy_id": strategy_id,
+        "symbol": symbol,
+        "direction": direction.lower(),
+        "buy_price": float(entry_price),
+        "sell_price": float(exit_price),
+        "quantity": float(quantity),
+        "fees": float(fee),
+        "entry_timestamp": entry_ts_str,
+        "exit_timestamp": exit_ts_str,
+        "status": status,
+        "net_pnl": float(net_pnl),
+        "notes": notes
+    }
+
     try:
         resp = requests.post(BASE44_API_URL, headers=headers, json=payload, timeout=12)
         if resp.status_code in [200, 201]:
             created = resp.json() if resp.text else payload
-            return "Success", f"Logged {symbol} {direction.upper()} to Base44 successfully.", created
+            status_desc = "CLOSED (Hit TP/SL)" if status == "closed" else "OPEN (Live Market)"
+            return "Success", f"Logged {symbol} {direction.upper()} as {status_desc} @ exit {exit_price} (Net P&L: ${net_pnl:+.2f} after ${fee:,.2f} fee)", created
         else:
             return "Error", f"Base44 API HTTP {resp.status_code}: {resp.text}", payload
     except Exception as e:
-        return "Error", f"Network error sending to Base44: {str(e)}", payload
+        return "Error", f"Request exception: {str(e)}", payload
+
+def check_and_update_all_open_trades(api_key: str, default_risk: float = 300.0) -> list:
+    """
+    Scans Base44 for any open trades, verifies against live OANDA candles,
+    and updates their status, exit price, exit timestamp in IST, and net P&L via PUT.
+    """
+    if not api_key:
+        return []
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    try:
+        resp = requests.get(BASE44_API_URL, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        all_items = data if isinstance(data, list) else (data.get("items", []) if isinstance(data, dict) else [])
+        open_items = [t for t in all_items if t.get("status") == "open"]
+        if not open_items:
+            return []
+            
+        updated_records = []
+        for trade in open_items:
+            t_id = trade.get("id")
+            sym = trade.get("symbol", "")
+            direction = str(trade.get("direction", "long")).lower()
+            buy_price = float(trade.get("buy_price", 0.0))
+            qty = float(trade.get("quantity", 1.0))
+            notes = str(trade.get("notes", ""))
+            
+            # Reconstruct SL & TP from notes
+            sl_price = 0.0
+            tp_price = 0.0
+            if "SL (" in notes and "TP (" in notes:
+                try:
+                    sl_price = float(notes.split("SL (")[1].split(")")[0])
+                    tp_price = float(notes.split("TP (")[1].split(")")[0])
+                except Exception:
+                    pass
+                    
+            if sl_price == 0.0:
+                if "JPY" in sym:
+                    sl_dist = buy_price * 0.0006
+                    sl_price = buy_price - sl_dist if direction == "long" else buy_price + sl_dist
+                    tp_price = buy_price + 5.0 * sl_dist if direction == "long" else buy_price - 5.0 * sl_dist
+                elif "GBP" in sym:
+                    sl_dist = buy_price * 0.00066
+                    sl_price = buy_price - sl_dist if direction == "long" else buy_price + sl_dist
+                    tp_price = buy_price + 3.75 * sl_dist if direction == "long" else buy_price - 3.75 * sl_dist
+                elif "XAU" in sym:
+                    sl_dist = buy_price * 0.005
+                    sl_price = buy_price - sl_dist if direction == "long" else buy_price + sl_dist
+                    tp_price = buy_price + 3.30 * sl_dist if direction == "long" else buy_price - 3.30 * sl_dist
+                    
+            entry_ts = trade.get("entry_timestamp", "")
+            try:
+                entry_d = dt.strptime(entry_ts[:10], "%Y-%m-%d").date()
+            except Exception:
+                entry_d = datetime.date.today()
+                
+            trade_dummy = {
+                "symbol": sym,
+                "direction": direction,
+                "entry_price": buy_price,
+                "sl_price": sl_price,
+                "tp_price": tp_price,
+                "date": entry_d,
+                "entry_time_ist": entry_ts[:16] if "T" in entry_ts else None
+            }
+            res = evaluate_trade_lifecycle(trade_dummy, risk_usd=default_risk)
+            new_status = res["status"]
+            exit_p = res["exit_price"]
+            fee = res["fee"]
+            exit_ts = res["exit_time_str"]
+            
+            if qty <= 1.0:
+                qty = res["quantity"]
+            gross_pnl = (exit_p - buy_price if direction == "long" else buy_price - exit_p) * qty
+            new_pnl = round(gross_pnl - fee, 2)
+            
+            if "Fee:" not in notes:
+                notes = f"{notes} | Fee: ${fee:,.2f}"
+                
+            put_payload = {
+                "strategy_id": trade.get("strategy_id"),
+                "symbol": sym,
+                "direction": direction,
+                "buy_price": buy_price,
+                "sell_price": float(exit_p),
+                "quantity": float(qty),
+                "fees": float(fee),
+                "entry_timestamp": trade.get("entry_timestamp"),
+                "exit_timestamp": exit_ts,
+                "status": new_status,
+                "net_pnl": float(new_pnl),
+                "notes": notes
+            }
+            put_resp = requests.put(f"{BASE44_API_URL}/{t_id}", headers=headers, json=put_payload, timeout=10)
+            if put_resp.status_code in [200, 201]:
+                updated_records.append({
+                    "id": t_id,
+                    "symbol": sym,
+                    "direction": direction,
+                    "status": new_status,
+                    "exit_price": exit_p,
+                    "exit_timestamp": exit_ts,
+                    "pnl": new_pnl
+                })
+        return updated_records
+    except Exception as e:
+        print(f"Error checking open trades: {e}")
+        return []
 
 # ==============================================================================
 # FASTAPI ENDPOINTS (VERCEL READY)
 # ==============================================================================
 @app.get("/")
 @app.get("/api")
+@app.get("/api/run")
 @app.get("/api/health")
+@app.get("/health")
 async def health_check():
     return {
-        "status": "healthy",
-        "message": "Base44 Daily Strategy Runner API is running.",
+        "status": "online",
+        "service": "Base44 Daily Strategy Runner API",
+        "version": "2.0.0",
         "strategies": [
-            {"id": STRAT1_ID, "name": "USDJPY SELFSWEEP", "symbol": "USDJPY"},
-            {"id": STRAT2_ID, "name": "GBPUSD ASIA 1.2 - 1.4 FIB RETRACMENT", "symbol": "GBPUSD"},
-            {"id": STRAT3_ID, "name": "XAUUSD 2H 4:30/5:30 DOL", "symbol": "XAUUSD"}
-        ]
+            {"name": "USDJPY SELFSWEEP", "id": STRAT1_ID},
+            {"name": "GBPUSD ASIA 1.2 - 1.4 FIB RETRACMENT", "id": STRAT2_ID},
+            {"name": "XAUUSD 2H 4:30/5:30 DOL", "id": STRAT3_ID}
+        ],
+        "message": "Send POST /api/run with {'date': 'YYYY-MM-DD', 'amount': 300.0, 'fees': 40.0} to execute strategies."
     }
 
 @app.post("/api/run")
@@ -705,95 +1108,149 @@ async def health_check():
 async def run_daily_strategies(payload: RunRequest):
     """
     Executes the 3 daily strategies for the requested date,
-    performs duplicate check, and logs valid setups directly to Base44 Trade Journal.
+    performs M1 lifecycle evaluation, duplicate check, and logs setups directly to Base44.
+    Also automatically checks and updates any existing OPEN trades in Base44!
     """
-    # 1. Resolve date
-    if payload.date:
+    # 1. Resolve evaluation dates
+    dates_to_eval = []
+    
+    # Check if date string contains a range format like "YYYY-MM-DD to YYYY-MM-DD"
+    if payload.date and " to " in str(payload.date):
+        parts = str(payload.date).split(" to ")
+        payload.start_date = parts[0].strip()
+        payload.end_date = parts[1].strip()
+
+    if payload.start_date and payload.end_date:
         try:
-            target_date = dt.strptime(payload.date[:10], "%Y-%m-%d").date()
+            s_d = dt.strptime(payload.start_date[:10], "%Y-%m-%d").date()
+            e_d = dt.strptime(payload.end_date[:10], "%Y-%m-%d").date()
+            if s_d > e_d:
+                s_d, e_d = e_d, s_d
+            curr = s_d
+            while curr <= e_d:
+                dates_to_eval.append(curr)
+                curr += timedelta(days=1)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid date range format. Use YYYY-MM-DD.")
+    elif payload.date:
+        try:
+            dates_to_eval.append(dt.strptime(payload.date[:10], "%Y-%m-%d").date())
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
     else:
-        target_date = datetime.date.today()
+        dates_to_eval.append(datetime.date.today())
 
-    amount = float(payload.amount if payload.amount is not None else 1.0)
+    amount = float(payload.amount if payload.amount is not None and payload.amount > 0 else 300.0)
     fees = float(payload.fees if payload.fees is not None else 40.0)
 
-    # 2. Execute 3 Strategy Models
-    res_usdjpy = run_usdjpy_strategy(target_date)
-    res_gbpusd = run_gbpusd_strategy(target_date)
-    res_xauusd = run_xauusd_strategy(target_date)
-
-    strategies_out = [
-        (res_usdjpy, STRAT1_ID),
-        (res_gbpusd, STRAT2_ID),
-        (res_xauusd, STRAT3_ID)
-    ]
+    # 2. Check and update existing open trades in Base44 first
+    open_updates = check_and_update_all_open_trades(BASE44_API_KEY, default_risk=amount)
 
     results_list = []
     logged_count = 0
     duplicate_count = 0
+    updated_count = 0
     active_count = 0
+    total_net_pnl = 0.0
 
-    # 3. Base44 Synchronization
-    for strat_result, strat_id in strategies_out:
-        is_active = strat_result["direction"] in ["long", "short"]
-        if is_active:
-            active_count += 1
-            sync_status, sync_msg, record_data = log_trade_to_base44(
-                BASE44_API_KEY, strat_id, strat_result, amount, fees
-            )
-            if sync_status == "Success":
-                logged_count += 1
-            elif sync_status == "Skipped (Duplicate)":
-                duplicate_count += 1
-        else:
-            sync_status = "N/A (No Setup)"
-            sync_msg = "No signal triggered for live execution."
-            record_data = {}
+    # 3. Iterate over all dates in requested range
+    for target_date in dates_to_eval:
+        res_usdjpy = run_usdjpy_strategy(target_date)
+        res_gbpusd = run_gbpusd_strategy(target_date)
+        res_xauusd = run_xauusd_strategy(target_date)
 
-        results_list.append({
-            "strategy_name": strat_result["strategy_name"],
-            "strategy_id": strat_id,
-            "symbol": strat_result["symbol"],
-            "date": target_date.strftime("%Y-%m-%d"),
-            "direction": strat_result["direction"].upper() if is_active else "NONE",
-            "entry_price": strat_result["entry_price"],
-            "sl_price": strat_result["sl_price"],
-            "tp_price": strat_result["tp_price"],
-            "sl_percentage": strat_result["sl_percentage"],
-            "tp_percentage": strat_result["tp_percentage"],
-            "status": strat_result["status"],
-            "details": strat_result["details"],
-            "data_source": strat_result.get("data_source", "OANDA"),
-            "base44_sync": sync_status,
-            "base44_message": sync_msg,
-            "base44_record": record_data
-        })
+        strategies_out = [
+            (res_usdjpy, STRAT1_ID),
+            (res_gbpusd, STRAT2_ID),
+            (res_xauusd, STRAT3_ID)
+        ]
+
+        for strat_result, strat_id in strategies_out:
+            is_active = strat_result["direction"] in ["long", "short"]
+            if is_active:
+                active_count += 1
+                sync_status, sync_msg, record_data = sync_trade_to_base44(
+                    BASE44_API_KEY, strat_id, strat_result, amount=amount, fees=fees
+                )
+                if sync_status == "Success":
+                    logged_count += 1
+                elif sync_status == "Updated":
+                    updated_count += 1
+                elif sync_status == "Skipped (Duplicate)":
+                    duplicate_count += 1
+                    
+                exit_price = record_data.get("sell_price", strat_result.get("tp_price", 0.0))
+                entry_time_ist = record_data.get("entry_timestamp", strat_result.get("entry_time_ist"))
+                exit_time_ist = record_data.get("exit_timestamp")
+                qty = record_data.get("quantity", 1.0)
+                net_pnl = record_data.get("net_pnl", 0.0)
+                total_net_pnl += net_pnl
+                trade_status = record_data.get("status", "open")
+                fee_used = record_data.get("fees", fees)
+                notes_text = record_data.get("notes", "")
+            else:
+                sync_status = "N/A (No Setup)"
+                sync_msg = "No signal triggered for live execution."
+                record_data = {}
+                exit_price = 0.0
+                entry_time_ist = None
+                exit_time_ist = None
+                qty = 0.0
+                net_pnl = 0.0
+                trade_status = "none"
+                fee_used = 0.0
+                notes_text = ""
+
+            results_list.append({
+                "strategy_name": strat_result["strategy_name"],
+                "strategy_id": strat_id,
+                "symbol": strat_result["symbol"],
+                "date": target_date.strftime("%Y-%m-%d"),
+                "direction": strat_result["direction"].upper() if is_active else "NONE",
+                "entry_price": strat_result["entry_price"],
+                "entry_time_ist": entry_time_ist,
+                "exit_price": exit_price,
+                "exit_time_ist": exit_time_ist,
+                "sl_price": strat_result["sl_price"],
+                "tp_price": strat_result["tp_price"],
+                "sl_percentage": strat_result["sl_percentage"],
+                "tp_percentage": strat_result["tp_percentage"],
+                "quantity": qty,
+                "net_pnl": net_pnl,
+                "fees": fee_used,
+                "status": strat_result["status"],
+                "lifecycle_status": trade_status,
+                "notes": notes_text,
+                "details": strat_result["details"],
+                "data_source": strat_result.get("data_source", "OANDA"),
+                "base44_sync": sync_status,
+                "base44_message": sync_msg,
+                "base44_record": record_data
+            })
+
+    total_evals = 3 * len(dates_to_eval)
+    date_label = f"{dates_to_eval[0].strftime('%Y-%m-%d')} to {dates_to_eval[-1].strftime('%Y-%m-%d')}" if len(dates_to_eval) > 1 else dates_to_eval[0].strftime('%Y-%m-%d')
 
     return {
         "status": "success",
-        "date": target_date.strftime("%Y-%m-%d"),
+        "date": date_label,
+        "mode": "date_range" if len(dates_to_eval) > 1 else "single_date",
+        "days_evaluated": len(dates_to_eval),
         "amount": amount,
         "fees": fees,
         "summary": {
-            "total_strategies": 3,
+            "total_strategies": total_evals,
+            "days_evaluated": len(dates_to_eval),
             "active_signals": active_count,
             "logged_trades": logged_count,
+            "updated_trades": updated_count,
             "duplicates": duplicate_count,
-            "skipped_or_no_setup": 3 - active_count
+            "open_trades_refreshed": len(open_updates),
+            "total_net_pnl": round(total_net_pnl, 2),
+            "skipped_or_no_setup": total_evals - active_count
         },
+        "open_trades_refreshed": open_updates,
         "results": results_list
-    }
-
-@app.get("/api/run")
-@app.get("/api/health")
-@app.get("/health")
-async def health_check():
-    return {
-        "status": "online",
-        "service": "Base44 Daily Strategy Runner API",
-        "message": "Send a POST request with JSON payload {'date': 'YYYY-MM-DD', 'amount': 1.0, 'fees': 40.0} to execute strategies."
     }
 
 # Mount static frontend files for seamless local preview (disabled in Vercel where CDN serves public/)
@@ -805,4 +1262,3 @@ if not os.environ.get("VERCEL"):
             app.mount("/", StaticFiles(directory=public_dir, html=True), name="static")
     except Exception:
         pass
-

@@ -14,11 +14,16 @@
   <link rel="icon" type="image/png" href="/icon.png" />
   <link rel="apple-touch-icon" href="/icon.png" />
 
-  <!-- Tailwind CSS & Inter Font -->
+  <!-- Tailwind CSS & Google Fonts -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+
+  <!-- Flatpickr Interactive Calendar & Dark Theme -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css">
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
 
   <script>
     tailwind.config = {
@@ -76,13 +81,62 @@
     .active-nav-glow {
       box-shadow: 0 -4px 18px rgba(16, 185, 129, 0.25);
     }
-    @keyframes pulse-ring {
-      0% { transform: scale(0.95); opacity: 0.8; }
-      50% { transform: scale(1.05); opacity: 0.4; }
-      100% { transform: scale(0.95); opacity: 0.8; }
+    /* Flatpickr Premium Dark Theme Adjustments */
+    .flatpickr-calendar {
+      background: #0b1120 !important;
+      border: 1px solid #1e293b !important;
+      border-radius: 18px !important;
+      box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.8) !important;
+      font-family: 'Plus Jakarta Sans', sans-serif !important;
+      width: 320px !important;
+      padding: 6px !important;
     }
-    .pulse-glow {
-      animation: pulse-ring 2.5s infinite ease-in-out;
+    .flatpickr-months {
+      background: #0f172a !important;
+      border-radius: 12px 12px 0 0 !important;
+      padding: 6px 0 !important;
+    }
+    .flatpickr-month {
+      color: #f8fafc !important;
+      fill: #f8fafc !important;
+    }
+    .flatpickr-current-month {
+      font-size: 105% !important;
+      font-weight: 700 !important;
+      color: #f8fafc !important;
+    }
+    .flatpickr-weekdays {
+      background: #0f172a !important;
+    }
+    span.flatpickr-weekday {
+      color: #64748b !important;
+      font-weight: 700 !important;
+      font-size: 80% !important;
+    }
+    .flatpickr-day {
+      color: #cbd5e1 !important;
+      border-radius: 10px !important;
+      margin: 2px 0 !important;
+      font-weight: 600 !important;
+    }
+    .flatpickr-day:hover {
+      background: #1e293b !important;
+      color: #ffffff !important;
+    }
+    .flatpickr-day.today {
+      border-color: #10b981 !important;
+    }
+    .flatpickr-day.selected, .flatpickr-day.startRange, .flatpickr-day.endRange {
+      background: #10b981 !important;
+      border-color: #10b981 !important;
+      color: #ffffff !important;
+      font-weight: 800 !important;
+    }
+    .flatpickr-day.inRange {
+      background: rgba(16, 185, 129, 0.22) !important;
+      border-color: transparent !important;
+      box-shadow: -4px 0 0 rgba(16, 185, 129, 0.22), 4px 0 0 rgba(16, 185, 129, 0.22) !important;
+      color: #a7f3d0 !important;
     }
   </style>
 </head>
@@ -126,32 +180,87 @@
     <!-- --------------------------------------------------------------------- -->
     <section id="tab-logger" class="space-y-4 block">
       
-      <!-- Date Picker & Quick Select Card -->
-      <div class="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 shadow-xl shadow-black/40 backdrop-blur-lg">
-        <label for="trade-date" class="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
-          📅 Evaluation Date
-        </label>
+      <!-- Interactive Calendar & Date Mode Card -->
+      <div class="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-4 shadow-xl shadow-black/40 backdrop-blur-lg space-y-3">
         
-        <div class="relative mb-3">
-          <input 
-            type="date" 
-            id="trade-date" 
-            class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-4 py-3 text-sm font-semibold text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all shadow-inner"
-          />
+        <!-- Header & Mode Switcher -->
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+            <span>📅</span> Evaluation Mode
+          </span>
+          
+          <div class="inline-flex p-0.5 rounded-xl bg-slate-950 border border-slate-800 text-xs shadow-inner">
+            <button type="button" id="mode-single-btn" class="px-2.5 py-1 rounded-lg font-bold text-emerald-400 bg-slate-800 shadow transition-all">
+              Single Date
+            </button>
+            <button type="button" id="mode-range-btn" class="px-2.5 py-1 rounded-lg font-medium text-slate-400 hover:text-white transition-all">
+              Date Range
+            </button>
+          </div>
         </div>
 
-        <!-- Quick Shortcuts -->
-        <div class="flex items-center gap-2">
-          <button type="button" id="btn-today" class="flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700/50">
-            Today
-          </button>
-          <button type="button" id="btn-yesterday" class="flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700/50">
-            Yesterday
-          </button>
-          <button type="button" id="btn-reset-date" class="py-1.5 px-3 rounded-lg text-xs font-semibold bg-slate-800/60 hover:bg-slate-700 text-slate-400 transition-colors">
-            Current IST
-          </button>
+        <!-- MODE 1: SINGLE DATE PICKER -->
+        <div id="single-date-section" class="space-y-2.5 block">
+          <div class="relative cursor-pointer" id="single-input-wrapper">
+            <input 
+              type="text" 
+              id="date-single-input" 
+              readonly
+              placeholder="Tap to open calendar..." 
+              class="w-full bg-slate-950 border border-slate-700/80 rounded-xl pl-11 pr-4 py-3 text-sm font-bold text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all shadow-inner cursor-pointer"
+            />
+            <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-emerald-400">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Shortcuts for Single Date -->
+          <div class="flex items-center gap-2">
+            <button type="button" id="btn-today" class="flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700/50">
+              Today
+            </button>
+            <button type="button" id="btn-yesterday" class="flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700/50">
+              Yesterday
+            </button>
+            <button type="button" id="btn-open-single-cal" class="py-1.5 px-3 rounded-lg text-xs font-semibold bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 transition-colors border border-emerald-500/30">
+              Open Calendar
+            </button>
+          </div>
         </div>
+
+        <!-- MODE 2: DATE RANGE PICKER -->
+        <div id="range-date-section" class="space-y-2.5 hidden">
+          <div class="relative cursor-pointer" id="range-input-wrapper">
+            <input 
+              type="text" 
+              id="date-range-input" 
+              readonly
+              placeholder="Tap to select Date Range..." 
+              class="w-full bg-slate-950 border border-slate-700/80 rounded-xl pl-11 pr-4 py-3 text-sm font-bold text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all shadow-inner cursor-pointer"
+            />
+            <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-emerald-400">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Shortcuts for Range -->
+          <div class="flex items-center gap-2">
+            <button type="button" id="btn-range-7d" class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700/50">
+              Last 7 Days
+            </button>
+            <button type="button" id="btn-range-14d" class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700/50">
+              Last 14 Days
+            </button>
+            <button type="button" id="btn-range-30d" class="flex-1 py-1.5 px-2 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 transition-colors border border-slate-700/50">
+              Last 30 Days
+            </button>
+          </div>
+        </div>
+
       </div>
 
       <!-- MASSIVE ACTION BUTTON -->
@@ -173,9 +282,9 @@
           <div class="w-12 h-12 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin"></div>
         </div>
         <div class="text-sm font-bold text-white tracking-wide" id="loading-message">
-          Streaming Live OANDA Candles...
+          Streaming Live OANDA Candles & Base44 Sync...
         </div>
-        <p class="text-xs text-slate-400">Auditing USDJPY, GBPUSD & XAUUSD models</p>
+        <p class="text-xs text-slate-400" id="loading-submessage">Evaluating USDJPY, GBPUSD & XAUUSD models</p>
       </div>
 
       <!-- RESULTS CONTAINER -->
@@ -196,28 +305,30 @@
             <span id="kpi-dupes" class="text-lg font-extrabold text-amber-400">0</span>
           </div>
           <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-2.5">
-            <span class="text-[10px] font-bold text-slate-400 block uppercase">Skipped</span>
-            <span id="kpi-skipped" class="text-lg font-extrabold text-slate-400">0</span>
+            <span class="text-[10px] font-bold text-slate-400 block uppercase">Total P&L</span>
+            <span id="kpi-pnl" class="text-sm font-extrabold text-emerald-300">$0.00</span>
           </div>
         </div>
 
-        <!-- STRATEGY CARDS LIST -->
+        <!-- STRATEGY OUTPUT CARDS -->
         <div id="strategy-cards" class="space-y-3">
-          <!-- Dynamic cards injected via JavaScript -->
+          <!-- Dynamically populated via JS -->
         </div>
 
-        <!-- RAW JSON COLLAPSIBLE -->
-        <div class="bg-slate-900/70 border border-slate-800/80 rounded-2xl overflow-hidden">
+        <!-- RAW JSON OUTPUT ACCORDION -->
+        <div class="bg-slate-900/90 border border-slate-800/90 rounded-2xl overflow-hidden shadow-lg">
           <button 
             type="button" 
             id="toggle-json-btn"
-            class="w-full px-4 py-3 text-xs font-bold text-slate-400 flex items-center justify-between bg-slate-900/90 hover:bg-slate-850"
+            class="w-full px-4 py-3 text-left text-xs font-bold text-slate-400 hover:text-white flex items-center justify-between bg-slate-950/60"
           >
-            <span>📜 Raw JSON Response</span>
-            <span id="json-arrow">▼</span>
+            <span class="flex items-center gap-1.5">
+              <span>🛠️</span> Raw Execution JSON
+            </span>
+            <span id="json-arrow" class="text-slate-500">▼</span>
           </button>
-          <div id="json-container" class="hidden p-3 bg-slate-950 font-mono text-[11px] text-slate-300 overflow-x-auto max-h-64 border-t border-slate-800">
-            <pre id="json-content">{}</pre>
+          <div id="json-container" class="hidden p-4 bg-slate-950 border-t border-slate-800/80">
+            <pre id="json-content" class="text-[11px] font-mono text-emerald-400 whitespace-pre-wrap break-all max-h-72 overflow-y-auto"></pre>
           </div>
         </div>
 
@@ -226,106 +337,100 @@
     </section>
 
     <!-- --------------------------------------------------------------------- -->
-    <!-- TAB 2: SETTINGS (PERSISTED VIA LOCALSTORAGE) -->
+    <!-- TAB 2: SETTINGS (PERSISTENT VIA LOCALSTORAGE) -->
     <!-- --------------------------------------------------------------------- -->
     <section id="tab-settings" class="space-y-4 hidden">
-      <div class="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-5 shadow-xl shadow-black/40 backdrop-blur-lg space-y-5">
-        
+      
+      <div class="bg-slate-900/90 border border-slate-800/90 rounded-2xl p-5 shadow-xl shadow-black/40 backdrop-blur-lg space-y-4">
         <div>
           <h2 class="text-base font-extrabold text-white flex items-center gap-2">
-            ⚙️ Execution Parameters
+            <span>⚙️</span> Strategy Execution Settings
           </h2>
           <p class="text-xs text-slate-400 mt-1">
-            Values are saved automatically in your browser's <code class="text-emerald-400">localStorage</code>.
+            Parameters persist in your browser's local storage and dynamically size every trade.
           </p>
         </div>
 
-        <!-- Input 1: Amount / Quantity -->
-        <div class="space-y-1.5">
-          <label for="setting-amount" class="block text-xs font-bold uppercase tracking-wider text-slate-300">
-            Position Amount / Quantity
-          </label>
-          <div class="relative">
-            <input 
-              type="number" 
-              step="any" 
-              id="setting-amount" 
-              placeholder="e.g. 100 or 1.0"
-              class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-4 py-3 text-sm font-semibold text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all shadow-inner"
-            />
+        <div class="space-y-3 pt-2">
+          <!-- Amount Input -->
+          <div>
+            <label for="setting-amount" class="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+              Risk Capital Amount ($)
+            </label>
+            <div class="relative">
+              <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-500 font-bold text-sm">$</span>
+              <input 
+                type="number" 
+                id="setting-amount" 
+                step="10" 
+                min="1"
+                placeholder="300"
+                class="w-full bg-slate-950 border border-slate-700/80 rounded-xl pl-8 pr-4 py-3 text-sm font-semibold text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all shadow-inner"
+              />
+            </div>
+            <p class="text-[11px] text-slate-500 mt-1">Exact USD risked on Stop Loss to calculate lot sizes ($300 standard).</p>
           </div>
-          <p class="text-[11px] text-slate-500">Maps directly to <span class="font-mono text-slate-400">quantity</span> in Base44 Trade Journal POST payload.</p>
-        </div>
 
-        <!-- Input 2: Fees ($) -->
-        <div class="space-y-1.5">
-          <label for="setting-fees" class="block text-xs font-bold uppercase tracking-wider text-slate-300">
-            Trading Fees ($)
-          </label>
-          <div class="relative">
-            <input 
-              type="number" 
-              step="any" 
-              id="setting-fees" 
-              placeholder="e.g. 40.0"
-              class="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-4 py-3 text-sm font-semibold text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all shadow-inner"
-            />
+          <!-- Fees Input -->
+          <div>
+            <label for="setting-fees" class="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-1.5">
+              Trading Fees ($)
+            </label>
+            <div class="relative">
+              <span class="absolute inset-y-0 left-0 pl-3.5 flex items-center text-slate-500 font-bold text-sm">$</span>
+              <input 
+                type="number" 
+                id="setting-fees" 
+                step="5" 
+                min="0"
+                placeholder="40"
+                class="w-full bg-slate-950 border border-slate-700/80 rounded-xl pl-8 pr-4 py-3 text-sm font-semibold text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all shadow-inner"
+              />
+            </div>
+            <p class="text-[11px] text-slate-500 mt-1">Default fixed broker fees ($25 XAUUSD, $40 GBPUSD & USDJPY).</p>
           </div>
-          <p class="text-[11px] text-slate-500">Fixed broker fee passed to <span class="font-mono text-slate-400">fees</span> in Base44 Trade Journal payload.</p>
         </div>
 
-        <!-- Info Card: Backend Credentials Status -->
-        <div class="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800 text-xs text-slate-400 space-y-2">
-          <div class="font-bold text-slate-200 flex items-center gap-1.5">
-            <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-            Backend Hardcoded Credentials
-          </div>
-          <p class="text-[11px] leading-relaxed">
-            Your Base44 Personal Access Token and Strategy IDs (USDJPY, GBPUSD, XAUUSD) are securely hardcoded inside <code class="text-emerald-400">api/run.py</code>.
-          </p>
+        <div id="save-toast" class="hidden text-xs font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-800/80 rounded-xl p-3 text-center transition-all animate-pulse">
+          ✓ Saved instantly to local storage
         </div>
-
-        <!-- Instant Saved Alert Pill -->
-        <div id="save-toast" class="hidden p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-semibold text-center transition-all">
-          ✓ Settings saved to localStorage instantly!
-        </div>
-
       </div>
+
+      <div class="bg-slate-900/60 border border-slate-800/60 rounded-2xl p-4 text-xs text-slate-400 space-y-2">
+        <span class="font-bold text-slate-300 block">🔒 Base44 Secret Credentials:</span>
+        <p>Hardcoded securely into FastAPI backend environment on Vercel. Frontend requires zero API keys.</p>
+      </div>
+
     </section>
 
   </main>
 
   <!-- ========================================================================= -->
-  <!-- BOTTOM NAVIGATION BAR (FIXED) -->
+  <!-- FIXED MOBILE BOTTOM NAVIGATION BAR -->
   <!-- ========================================================================= -->
-  <nav class="fixed bottom-0 left-0 right-0 z-50 bg-[#090d16]/95 backdrop-blur-xl border-t border-slate-800/80 pb-[max(env(safe-area-inset-bottom),8px)]">
-    <div class="max-w-md mx-auto grid grid-cols-2 h-16">
+  <nav class="fixed bottom-0 inset-x-0 z-50 bg-[#090d16]/95 backdrop-blur-2xl border-t border-slate-800/90 px-6 py-2 shadow-2xl active-nav-glow">
+    <div class="max-w-md mx-auto flex items-center justify-around">
       
-      <!-- Tab Button 1: Logger -->
+      <!-- Tab 1: Logger -->
       <button 
         type="button" 
         id="nav-logger" 
-        class="flex flex-col items-center justify-center space-y-1 text-emerald-400 font-bold transition-all relative"
+        class="flex flex-col items-center justify-center py-1 text-emerald-400 font-bold transition-all group flex-1"
       >
-        <svg class="w-6 h-6 transition-transform active:scale-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-        </svg>
-        <span class="text-[11px] tracking-wide">Logger</span>
-        <span id="nav-logger-indicator" class="w-8 h-1 bg-emerald-400 rounded-full absolute bottom-1"></span>
+        <span class="text-xl leading-none mb-1 group-active:scale-90 transition-transform">📊</span>
+        <span class="text-[11px] tracking-tight">Logger</span>
+        <span id="nav-logger-indicator" class="w-1.5 h-1.5 bg-emerald-400 rounded-full mt-0.5"></span>
       </button>
 
-      <!-- Tab Button 2: Settings -->
+      <!-- Tab 2: Settings -->
       <button 
         type="button" 
         id="nav-settings" 
-        class="flex flex-col items-center justify-center space-y-1 text-slate-400 hover:text-slate-200 font-semibold transition-all relative"
+        class="flex flex-col items-center justify-center py-1 text-slate-400 hover:text-slate-200 transition-all group flex-1"
       >
-        <svg class="w-6 h-6 transition-transform active:scale-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-        </svg>
-        <span class="text-[11px] tracking-wide">Settings</span>
-        <span id="nav-settings-indicator" class="w-8 h-1 bg-emerald-400 rounded-full absolute bottom-1 hidden"></span>
+        <span class="text-xl leading-none mb-1 group-active:scale-90 transition-transform">⚙️</span>
+        <span class="text-[11px] tracking-tight">Settings</span>
+        <span id="nav-settings-indicator" class="w-1.5 h-1.5 bg-emerald-400 rounded-full mt-0.5 hidden"></span>
       </button>
 
     </div>
@@ -336,13 +441,26 @@
   <!-- ========================================================================= -->
   <script>
     // 1. Initial State & Defaults
-    const DEFAULT_AMOUNT = 100.0;
+    const DEFAULT_AMOUNT = 300.0;
     const DEFAULT_FEES = 40.0;
 
-    const elDate = document.getElementById('trade-date');
+    let currentMode = 'single'; // 'single' or 'range'
+
+    const elDateSingleInput = document.getElementById('date-single-input');
+    const elDateRangeInput = document.getElementById('date-range-input');
+
+    const elModeSingleBtn = document.getElementById('mode-single-btn');
+    const elModeRangeBtn = document.getElementById('mode-range-btn');
+    const elSingleDateSection = document.getElementById('single-date-section');
+    const elRangeDateSection = document.getElementById('range-date-section');
+
     const elBtnToday = document.getElementById('btn-today');
     const elBtnYesterday = document.getElementById('btn-yesterday');
-    const elBtnResetDate = document.getElementById('btn-reset-date');
+    const elBtnOpenSingleCal = document.getElementById('btn-open-single-cal');
+    const elBtnRange7d = document.getElementById('btn-range-7d');
+    const elBtnRange14d = document.getElementById('btn-range-14d');
+    const elBtnRange30d = document.getElementById('btn-range-30d');
+
     const elBtnRun = document.getElementById('btn-run');
     const elRunBtnText = document.getElementById('run-btn-text');
 
@@ -358,6 +476,8 @@
     const elSaveToast = document.getElementById('save-toast');
 
     const elLoadingState = document.getElementById('loading-state');
+    const elLoadingMessage = document.getElementById('loading-message');
+    const elLoadingSubmessage = document.getElementById('loading-submessage');
     const elResultsArea = document.getElementById('results-area');
     const elStrategyCards = document.getElementById('strategy-cards');
     const elJsonContent = document.getElementById('json-content');
@@ -369,21 +489,106 @@
     const elKpiActive = document.getElementById('kpi-active');
     const elKpiLogged = document.getElementById('kpi-logged');
     const elKpiDupes = document.getElementById('kpi-dupes');
-    const elKpiSkipped = document.getElementById('kpi-skipped');
+    const elKpiPnl = document.getElementById('kpi-pnl');
 
-    // Format current date YYYY-MM-DD
-    function getTodayString() {
-      const now = new Date();
-      return now.toISOString().split('T')[0];
-    }
-
-    function getYesterdayString() {
-      const d = new Date();
-      d.setDate(d.getDate() - 1);
+    // Format helpers
+    function formatDate(d) {
       return d.toISOString().split('T')[0];
     }
+    function getTodayString() {
+      return formatDate(new Date());
+    }
+    function getPastDateString(daysAgo) {
+      const d = new Date();
+      d.setDate(d.getDate() - daysAgo);
+      return formatDate(d);
+    }
 
-    // 2. Load and Bind localStorage Settings
+    // 2. Initialize Flatpickr Interactive Calendars
+    const fpSingle = flatpickr(elDateSingleInput, {
+      theme: "dark",
+      dateFormat: "Y-m-d",
+      defaultDate: new Date(),
+      disableMobile: true, // Forces touch-friendly popup calendar on all mobile screens
+      onChange: function(selectedDates, dateStr) {
+        updateRunButtonText();
+      }
+    });
+
+    const fpRange = flatpickr(elDateRangeInput, {
+      theme: "dark",
+      mode: "range",
+      dateFormat: "Y-m-d",
+      defaultDate: [getPastDateString(6), getTodayString()],
+      disableMobile: true, // Forces touch-friendly popup calendar on all mobile screens
+      onChange: function(selectedDates, dateStr) {
+        updateRunButtonText();
+      }
+    });
+
+    // Tap wrapper opens calendar
+    document.getElementById('single-input-wrapper').addEventListener('click', () => fpSingle.open());
+    document.getElementById('range-input-wrapper').addEventListener('click', () => fpRange.open());
+    elBtnOpenSingleCal.addEventListener('click', () => fpSingle.open());
+
+    // 3. Mode Toggle (Single Date vs Date Range)
+    function setEvaluationMode(mode) {
+      currentMode = mode;
+      if (mode === 'single') {
+        elSingleDateSection.classList.remove('hidden');
+        elRangeDateSection.classList.add('hidden');
+
+        elModeSingleBtn.className = "px-2.5 py-1 rounded-lg font-bold text-emerald-400 bg-slate-800 shadow transition-all";
+        elModeRangeBtn.className = "px-2.5 py-1 rounded-lg font-medium text-slate-400 hover:text-white transition-all";
+      } else {
+        elSingleDateSection.classList.add('hidden');
+        elRangeDateSection.classList.remove('hidden');
+
+        elModeRangeBtn.className = "px-2.5 py-1 rounded-lg font-bold text-emerald-400 bg-slate-800 shadow transition-all";
+        elModeSingleBtn.className = "px-2.5 py-1 rounded-lg font-medium text-slate-400 hover:text-white transition-all";
+      }
+      updateRunButtonText();
+    }
+
+    elModeSingleBtn.addEventListener('click', () => setEvaluationMode('single'));
+    elModeRangeBtn.addEventListener('click', () => setEvaluationMode('range'));
+
+    // Quick Date Shortcuts
+    elBtnToday.addEventListener('click', () => {
+      fpSingle.setDate(new Date());
+      updateRunButtonText();
+    });
+    elBtnYesterday.addEventListener('click', () => {
+      const d = new Date();
+      d.setDate(d.getDate() - 1);
+      fpSingle.setDate(d);
+      updateRunButtonText();
+    });
+
+    elBtnRange7d.addEventListener('click', () => {
+      fpRange.setDate([getPastDateString(6), getTodayString()]);
+      updateRunButtonText();
+    });
+    elBtnRange14d.addEventListener('click', () => {
+      fpRange.setDate([getPastDateString(13), getTodayString()]);
+      updateRunButtonText();
+    });
+    elBtnRange30d.addEventListener('click', () => {
+      fpRange.setDate([getPastDateString(29), getTodayString()]);
+      updateRunButtonText();
+    });
+
+    function updateRunButtonText() {
+      if (currentMode === 'single') {
+        const d = elDateSingleInput.value || getTodayString();
+        elRunBtnText.textContent = `Run Strategies (${d})`;
+      } else {
+        const r = elDateRangeInput.value || `${getPastDateString(6)} to ${getTodayString()}`;
+        elRunBtnText.textContent = `Run Range (${r})`;
+      }
+    }
+
+    // 4. Load and Bind localStorage Settings
     function initSettings() {
       const savedAmount = localStorage.getItem('trading_amount');
       const savedFees = localStorage.getItem('trading_fees');
@@ -393,6 +598,7 @@
 
       elSettingAmount.addEventListener('input', persistSettings);
       elSettingFees.addEventListener('input', persistSettings);
+      updateRunButtonText();
     }
 
     function persistSettings() {
@@ -409,7 +615,7 @@
       }, 1800);
     }
 
-    // 3. Tab Switching
+    // 5. Tab Switching (Logger vs Settings)
     function switchTab(target) {
       if (target === 'logger') {
         elTabLogger.classList.remove('hidden');
@@ -439,13 +645,7 @@
     elNavLogger.addEventListener('click', () => switchTab('logger'));
     elNavSettings.addEventListener('click', () => switchTab('settings'));
 
-    // 4. Date Buttons
-    elDate.value = getTodayString();
-    elBtnToday.addEventListener('click', () => { elDate.value = getTodayString(); });
-    elBtnYesterday.addEventListener('click', () => { elDate.value = getYesterdayString(); });
-    elBtnResetDate.addEventListener('click', () => { elDate.value = getTodayString(); });
-
-    // 5. Toggle JSON Drawer
+    // 6. Toggle JSON Drawer
     elToggleJsonBtn.addEventListener('click', () => {
       const isHidden = elJsonContainer.classList.contains('hidden');
       if (isHidden) {
@@ -457,25 +657,45 @@
       }
     });
 
-    // 6. Execute Run Strategies API
+    // 7. Execute Run Strategies API
     async function handleRunStrategies() {
-      const selectedDate = elDate.value || getTodayString();
       const amount = parseFloat(elSettingAmount.value) || DEFAULT_AMOUNT;
       const fees = parseFloat(elSettingFees.value) || DEFAULT_FEES;
 
+      let payload = { amount: amount, fees: fees };
+
+      if (currentMode === 'single') {
+        payload.date = elDateSingleInput.value || getTodayString();
+      } else {
+        const rangeStr = elDateRangeInput.value || "";
+        if (rangeStr.includes(" to ")) {
+          const parts = rangeStr.split(" to ");
+          payload.start_date = parts[0].trim();
+          payload.end_date = parts[1].trim();
+        } else if (rangeStr) {
+          payload.start_date = rangeStr.trim();
+          payload.end_date = rangeStr.trim();
+        } else {
+          payload.start_date = getPastDateString(6);
+          payload.end_date = getTodayString();
+        }
+      }
+
       // Loading state
       elBtnRun.disabled = true;
-      elRunBtnText.textContent = "Analyzing & Logging...";
+      elRunBtnText.textContent = "Analyzing & Syncing...";
       elLoadingState.classList.remove('hidden');
       elResultsArea.classList.add('hidden');
 
-      try {
-        const payload = {
-          date: selectedDate,
-          amount: amount,
-          fees: fees
-        };
+      if (currentMode === 'range') {
+        elLoadingMessage.textContent = "Scanning Date Range...";
+        elLoadingSubmessage.textContent = `Auditing strategies from ${payload.start_date} to ${payload.end_date}`;
+      } else {
+        elLoadingMessage.textContent = "Streaming Live Candles...";
+        elLoadingSubmessage.textContent = `Auditing USDJPY, GBPUSD & XAUUSD for ${payload.date}`;
+      }
 
+      try {
         const response = await fetch('/api/run', {
           method: 'POST',
           headers: {
@@ -496,14 +716,14 @@
         console.error(err);
       } finally {
         elBtnRun.disabled = false;
-        elRunBtnText.textContent = "Run Daily Strategies";
+        updateRunButtonText();
         elLoadingState.classList.add('hidden');
       }
     }
 
     elBtnRun.addEventListener('click', handleRunStrategies);
 
-    // 7. Render Result Cards
+    // 8. Render Result Cards
     function renderResults(data) {
       elResultsArea.classList.remove('hidden');
 
@@ -511,7 +731,10 @@
       elKpiActive.textContent = data.summary?.active_signals || 0;
       elKpiLogged.textContent = data.summary?.logged_trades || 0;
       elKpiDupes.textContent = data.summary?.duplicates || 0;
-      elKpiSkipped.textContent = data.summary?.skipped_or_no_setup || 0;
+      
+      const totPnl = data.summary?.total_net_pnl || 0;
+      elKpiPnl.textContent = `${totPnl >= 0 ? '+' : ''}$${totPnl.toFixed(2)}`;
+      elKpiPnl.className = `text-sm font-extrabold ${totPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
 
       // Update JSON Box
       elJsonContent.textContent = JSON.stringify(data, null, 2);
@@ -536,21 +759,26 @@
 
         let syncBadgeClass = 'bg-slate-800 text-slate-400';
         if (item.base44_sync === 'Success') syncBadgeClass = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
+        if (item.base44_sync === 'Updated') syncBadgeClass = 'bg-blue-500/20 text-blue-300 border-blue-500/30';
         if (item.base44_sync === 'Skipped (Duplicate)') syncBadgeClass = 'bg-amber-500/20 text-amber-300 border-amber-500/30';
         if (item.base44_sync === 'Error') syncBadgeClass = 'bg-rose-500/20 text-rose-300 border-rose-500/30';
 
         const card = document.createElement('div');
         card.className = `bg-slate-900/90 border rounded-2xl p-4 shadow-lg transition-all ${
-          isActive ? 'border-slate-700 shadow-slate-950/60' : 'border-slate-800/80 opacity-85'
+          isActive ? 'border-slate-700 shadow-slate-950/60' : 'border-slate-800/80 opacity-80'
         }`;
 
         card.innerHTML = `
           <div class="flex items-center justify-between gap-2 mb-2">
             <div>
-              <span class="text-sm font-extrabold text-white tracking-wide">${item.symbol}</span>
+              <div class="flex items-center gap-2">
+                <span class="text-sm font-extrabold text-white tracking-wide">${item.symbol}</span>
+                <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700/60">${item.date}</span>
+              </div>
               <span class="text-[11px] text-slate-400 block">${item.strategy_name}</span>
             </div>
             <div class="flex items-center gap-1.5">
+              ${isActive ? `<span class="text-[10px] font-bold px-2 py-0.5 rounded-full border ${item.lifecycle_status === 'closed' ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' : 'bg-blue-500/20 text-blue-300 border-blue-500/30'}">${(item.lifecycle_status || 'open').toUpperCase()}</span>` : ''}
               <span class="text-xs font-black px-2.5 py-1 rounded-full border ${badgeBg}">
                 ${item.direction}
               </span>
@@ -558,10 +786,11 @@
           </div>
 
           ${isActive ? `
-          <div class="grid grid-cols-3 gap-2 my-3 p-2.5 bg-slate-950/80 rounded-xl border border-slate-800/80 text-center font-mono">
+          <div class="grid grid-cols-3 gap-2 my-2.5 p-2.5 bg-slate-950/80 rounded-xl border border-slate-800/80 text-center font-mono">
             <div>
               <span class="text-[10px] text-slate-500 uppercase block">Entry</span>
               <span class="text-xs font-bold text-white">${item.entry_price}</span>
+              <span class="text-[10px] text-slate-400 block mt-0.5">${item.entry_time_ist ? item.entry_time_ist.split('T')[1] : '-'} IST</span>
             </div>
             <div>
               <span class="text-[10px] text-slate-500 uppercase block">SL (${item.sl_percentage}%)</span>
@@ -572,6 +801,27 @@
               <span class="text-xs font-bold text-emerald-400">${item.tp_price}</span>
             </div>
           </div>
+
+          <div class="grid grid-cols-3 gap-2 my-2.5 p-2.5 bg-slate-950/60 rounded-xl border border-slate-800/60 text-center font-mono">
+            <div>
+              <span class="text-[10px] text-slate-500 uppercase block">Exit Price</span>
+              <span class="text-xs font-bold ${item.lifecycle_status === 'closed' ? 'text-amber-300' : 'text-blue-300'}">${item.exit_price || '-'}</span>
+              <span class="text-[10px] text-slate-400 block mt-0.5">${item.exit_time_ist ? item.exit_time_ist.split('T')[1] : '-'} IST</span>
+            </div>
+            <div>
+              <span class="text-[10px] text-slate-500 uppercase block">Lot Size</span>
+              <span class="text-xs font-bold text-slate-200">${item.quantity ? (item.symbol.includes('XAU') ? item.quantity + ' oz' : item.quantity.toLocaleString() + ' u') : '-'}</span>
+            </div>
+            <div>
+              <span class="text-[10px] text-slate-500 uppercase block">Net P&L</span>
+              <span class="text-xs font-bold ${item.net_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${item.net_pnl >= 0 ? '+' : ''}$${(item.net_pnl || 0).toFixed(2)}</span>
+            </div>
+          </div>
+
+          ${item.notes ? `
+          <div class="text-[10px] text-slate-400 font-mono bg-slate-950/50 p-2 rounded-lg border border-slate-800/50 my-2 truncate" title="${item.notes}">
+            📝 ${item.notes}
+          </div>` : ''}
           ` : `
           <div class="my-2 p-2 bg-slate-950/40 rounded-xl text-xs text-slate-400">
             <span class="text-slate-500 font-semibold">Status:</span> ${item.status}
