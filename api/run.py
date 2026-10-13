@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 import datetime
 from datetime import datetime as dt, timezone, timedelta, time
@@ -224,6 +225,93 @@ def get_trade_fee(symbol: str, user_fee: Optional[float] = None) -> float:
     return float(user_fee or 40.0)
 
 # ==============================================================================
+# REAL-TIME HIGH-IMPACT NEWS MONITOR (NFP, CPI, FOMC, BOJ)
+# ==============================================================================
+_NEWS_CACHE: Dict[str, list] = {}
+
+def get_realtime_news_events(start_date: datetime.date, end_date: datetime.date) -> list:
+    """
+    Fetches real-time institutional economic calendar events for the Big 4 high-impact releases:
+    1. NFP (US Non-Farm Payrolls / Jobs Report)
+    2. CPI (US Consumer Price Index)
+    3. FOMC (Federal Open Market Committee Rate Decision)
+    4. BOJ Rate (Bank of Japan Interest Rate Decision)
+    Primary: FinanceCalendar API (zero-key / live real-time JSON)
+    Secondary Fallback: Forex Factory Live NFS Feed
+    """
+    cache_key = f"{start_date}_{end_date}"
+    if cache_key in _NEWS_CACHE:
+        return _NEWS_CACHE[cache_key]
+
+    events = []
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    # Primary Source: FinanceCalendar API
+    try:
+        url = f"https://www.financecalendar.com/wp-json/fc/v1/calendar?from={start_date}&to={end_date}&impact=high"
+        r = requests.get(url, headers=headers, timeout=5)
+        if r.status_code == 200:
+            for ev in r.json().get("events", []):
+                name = (ev.get("name") or "").lower()
+                title = (ev.get("title") or "").lower()
+                has_us = bool(re.search(r'\b(us|usa|united states)\b', name) or re.search(r'\b(us|usa|united states)\b', title))
+                is_nfp = ("nfp" in name or "non-farm" in name or "jobs report" in name) and has_us
+                is_cpi = ("cpi" in name or "cpi" in title) and has_us
+                is_fomc = "fomc" in name or "fomc" in title or "federal funds rate" in name
+                is_boj = "bank of japan" in name or "boj" in name or "bank of japan" in title
+
+                if is_nfp or is_cpi or is_fomc or is_boj:
+                    cat = "NFP" if is_nfp else ("CPI" if is_cpi else ("FOMC" if is_fomc else "BOJ_RATE"))
+                    time_utc_str = ev.get("time_utc")
+                    if time_utc_str:
+                        ev_utc = dt.fromisoformat(time_utc_str)
+                        ev_ist = ev_utc.astimezone(timezone(timedelta(hours=5, minutes=30))).replace(tzinfo=None)
+                    else:
+                        d_val = dt.strptime(ev.get("date"), "%Y-%m-%d").date()
+                        ev_ist = dt(d_val.year, d_val.month, d_val.day, 8, 30)
+                    events.append({
+                        "category": cat,
+                        "title": ev.get("name", cat),
+                        "dt_ist": ev_ist,
+                        "date_str": ev.get("date")
+                    })
+    except Exception:
+        pass
+
+    # Secondary Fallback: Forex Factory Live Feed
+    if not events:
+        try:
+            ff_url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+            r = requests.get(ff_url, headers=headers, timeout=5)
+            if r.status_code == 200:
+                for ev in r.json():
+                    if ev.get("impact") != "High":
+                        continue
+                    country = ev.get("country", "")
+                    title = (ev.get("title") or "").lower()
+                    is_nfp = (country == "USD" and ("non-farm" in title or "nfp" in title))
+                    is_cpi = (country == "USD" and "cpi" in title)
+                    is_fomc = (country == "USD" and ("fomc" in title or "federal funds rate" in title))
+                    is_boj = (country == "JPY" and ("policy rate" in title or "monetary policy" in title or "boj" in title))
+
+                    if is_nfp or is_cpi or is_fomc or is_boj:
+                        cat = "NFP" if is_nfp else ("CPI" if is_cpi else ("FOMC" if is_fomc else "BOJ_RATE"))
+                        dt_str = ev.get("date")
+                        ev_dt = dt.fromisoformat(dt_str)
+                        ev_ist = ev_dt.astimezone(timezone(timedelta(hours=5, minutes=30))).replace(tzinfo=None)
+                        events.append({
+                            "category": cat,
+                            "title": ev.get("title", cat),
+                            "dt_ist": ev_ist,
+                            "date_str": ev_ist.strftime("%Y-%m-%d")
+                        })
+        except Exception:
+            pass
+
+    _NEWS_CACHE[cache_key] = events
+    return events
+
+# ==============================================================================
 # TRADE LIFECYCLE EVALUATOR (M1 PRECISION & LIVE OUTCOMES)
 # ==============================================================================
 def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_override: Optional[float] = None) -> dict:
@@ -231,6 +319,7 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
     Evaluates whether trade hit TP, SL, or is currently OPEN.
     Uses precise 1-minute (M1) candles for exact exit timing down to the minute in IST.
     Format: YYYY-MM-DDTHH:MM (Exact Indian Standard Time)
+    Auto-exits 5 minutes before scheduled high-impact news releases (NFP, CPI, FOMC, BOJ).
     """
     symbol = trade_info["symbol"]
     direction = trade_info["direction"].lower()
@@ -255,6 +344,12 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
     status = "open"
     exit_price = get_latest_market_price(symbol)
     exit_time_str = None
+    exit_reason = None
+
+    # Fetch live real-time high-impact economic news events (NFP, CPI, FOMC, BOJ)
+    realtime_news = []
+    if symbol == "USDJPY":
+        realtime_news = get_realtime_news_events(trade_date, trade_date + timedelta(days=2))
     
     if not candles_df.empty:
         if not entry_time_str:
@@ -280,33 +375,54 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
             c_high, c_low, c_dt_ist, c_time_utc = c['high'], c['low'], c['dt_ist'], c['time_utc']
             hit_exit = False
 
+            # 1. Real-time High Impact News Exit (Cut 5 minutes before NFP, CPI, FOMC, BOJ Rate)
+            if symbol == "USDJPY" and realtime_news:
+                c_end_ist = c_dt_ist + timedelta(minutes=15)
+                is_news_exit = False
+                for ev in realtime_news:
+                    n_dt = ev['dt_ist']
+                    if c_dt_ist < n_dt <= c_end_ist:
+                        status = "closed"
+                        exit_price = c['open']
+                        exit_time_str = (n_dt - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M")
+                        exit_reason = f"Pre-News Exit (5m before {ev['category']}: {ev['title']})"
+                        hit_exit = True
+                        is_news_exit = True
+                        break
+                if is_news_exit:
+                    break
 
-            # Weekend cutoff check: Saturday before 02:30 AM (Summer) / 03:30 AM (Winter)
+            # 2. Weekend cutoff check: Saturday before 02:30 AM (Summer) / 03:30 AM (Winter)
             if c_dt_ist.weekday() == 5:
                 cut_t = time(2, 15) if is_us_dst(c_time_utc) else time(3, 15)
                 if c_dt_ist.time() >= cut_t:
                     status = "closed"
                     exit_price = c['close']
                     exit_time_str = (c_dt_ist + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M")
+                    exit_reason = "Weekend Close"
                     break
 
             if direction == "long":
                 if c_low <= sl_price:
                     status = "closed"
                     exit_price = sl_price
+                    exit_reason = "SL Hit"
                     hit_exit = True
                 elif c_high >= tp_price:
                     status = "closed"
                     exit_price = tp_price
+                    exit_reason = "TP Hit"
                     hit_exit = True
             elif direction == "short":
                 if c_high >= sl_price:
                     status = "closed"
                     exit_price = sl_price
+                    exit_reason = "SL Hit"
                     hit_exit = True
                 elif c_low <= tp_price:
                     status = "closed"
                     exit_price = tp_price
+                    exit_reason = "TP Hit"
                     hit_exit = True
                     
             if hit_exit:
@@ -353,7 +469,8 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
         "quantity": quantity,
         "gross_pnl": round(gross_pnl, 2),
         "fee": fee,
-        "net_pnl": round(net_pnl, 2)
+        "net_pnl": round(net_pnl, 2),
+        "exit_reason": exit_reason
     }
 
 # ==============================================================================
@@ -1327,7 +1444,10 @@ def sync_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict, amoun
     fee = lifecycle["fee"]
     exit_ts_str = lifecycle["exit_time_str"]
     entry_ts_str = lifecycle["entry_time_str"]
+    exit_reason = lifecycle.get("exit_reason")
     notes = f"{sl_pct}% SL ({sl_price}) , {tp_pct}% TP ({tp_price}) | Risk: ${amount:,.2f} | Fee: ${fee:,.2f}"
+    if exit_reason:
+        notes += f" | {exit_reason}"
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -1675,6 +1795,30 @@ async def run_daily_strategies(payload: RunRequest):
         },
         "open_trades_refreshed": open_updates,
         "results": results_list
+    }
+
+@app.get("/api/news")
+def get_upcoming_news():
+    """
+    Returns real-time upcoming high-impact economic calendar events (NFP, CPI, FOMC, BOJ)
+    fetched live from institutional calendar APIs.
+    """
+    today = datetime.date.today()
+    events = get_realtime_news_events(today, today + timedelta(days=14))
+    res_events = []
+    for ev in events:
+        res_events.append({
+            "category": ev["category"],
+            "title": ev["title"],
+            "dt_ist": ev["dt_ist"].strftime("%Y-%m-%d %H:%M:%S"),
+            "date": ev.get("date_str", ev["dt_ist"].strftime("%Y-%m-%d")),
+            "auto_exit_time_ist": (ev["dt_ist"] - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+        })
+    return {
+        "success": True,
+        "count": len(res_events),
+        "monitored_events": ["NFP", "CPI", "FOMC", "BOJ_RATE"],
+        "events": res_events
     }
 
 # Mount static frontend files for seamless local preview (disabled in Vercel where CDN serves public/)
