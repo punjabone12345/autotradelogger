@@ -279,20 +279,7 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
         for _, c in sub_df.iterrows():
             c_high, c_low, c_dt_ist, c_time_utc = c['high'], c['low'], c['dt_ist'], c['time_utc']
             hit_exit = False
-            
-            # High-Impact News cutoff check for USDJPY (exit 5 min before NFP, CPI, FOMC, BOJ Rate)
-            if symbol == "USDJPY":
-                c_end_ist = c_dt_ist + timedelta(minutes=15)
-                is_news_exit = False
-                for n_dt in USDJPY_HIGH_IMPACT_NEWS_SCHEDULE:
-                    if c_dt_ist < n_dt <= c_end_ist:
-                        status = "closed"
-                        exit_price = c['open']
-                        exit_time_str = (n_dt - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M")
-                        is_news_exit = True
-                        break
-                if is_news_exit:
-                    break
+
 
             # Weekend cutoff check: Saturday before 02:30 AM (Summer) / 03:30 AM (Winter)
             if c_dt_ist.weekday() == 5:
