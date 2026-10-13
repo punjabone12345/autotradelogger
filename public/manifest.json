@@ -1,0 +1,22 @@
+{
+  "short_name": "Base44 Terminal",
+  "name": "Base44 Daily Strategy Runner",
+  "description": "Mobile-Optimized Daily Trading Terminal & Base44 Trade Logger",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "/icon.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#090d16",
+  "theme_color": "#090d16",
+  "display": "standalone",
+  "orientation": "portrait"
+}
