@@ -280,6 +280,15 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
             c_high, c_low, c_dt_ist, c_time_utc = c['high'], c['low'], c['dt_ist'], c['time_utc']
             hit_exit = False
             
+            # Weekend cutoff check: Saturday before 02:30 AM (Summer) / 03:30 AM (Winter)
+            if c_dt_ist.weekday() == 5:
+                cut_t = time(2, 15) if is_us_dst(c_time_utc) else time(3, 15)
+                if c_dt_ist.time() >= cut_t:
+                    status = "closed"
+                    exit_price = c['close']
+                    exit_time_str = (c_dt_ist + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M")
+                    break
+
             if direction == "long":
                 if c_low <= sl_price:
                     status = "closed"
@@ -415,25 +424,34 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
             
             # Long Check
             ext_low, ceiling, state = lows[0], highs[0], 'SEEK_CC'
+            sweep_ext = None
+            wait_cnt = 0
             for i in range(1, N):
                 c_o, c_h, c_l, c_c = opens[i], highs[i], lows[i], closes[i]
                 if state == 'SEEK_CC':
-                    if c_l <= ext_low: ext_low, ceiling = c_l, c_h
+                    if c_l <= ext_low:
+                        ext_low, ceiling = c_l, c_h
                     else:
-                        if c_c > ceiling: state = 'WAIT_SUSTAIN'
+                        if c_c > ceiling:
+                            state = 'WAIT_OPPOSITE'
                         ceiling = max(ceiling, c_h)
-                elif state == 'WAIT_SUSTAIN':
-                    if c_l <= ext_low: ext_low, ceiling, state = c_l, c_h, 'SEEK_CC'
-                    else: state = 'WAIT_SWEEP'
+                elif state == 'WAIT_OPPOSITE':
+                    if c_l <= ext_low:
+                        ext_low, ceiling, state = c_l, c_h, 'SEEK_CC'
+                    else:
+                        ceiling = max(ceiling, c_h)
+                        if c_c < c_o:  # Bearish opposite candle formed before level touch
+                            state = 'WAIT_SWEEP'
                 elif state == 'WAIT_SWEEP':
                     if c_l <= ext_low - 0.001:
-                        if c_c <= ext_low: ext_low, ceiling, state = c_l, c_h, 'SEEK_CC'
+                        if c_c <= ext_low:
+                            ext_low, ceiling, state = c_l, c_h, 'SEEK_CC'
                         else:
-                            if c_c > c_o:
-                                body = c_c - c_o
-                                l_wick = c_o - c_l
-                                ratio_ok = (body >= 0.002) if (l_wick >= 0.100) else (body >= 0.003)
-                                if ratio_ok:
+                            l_wick = c_o - c_l if c_c > c_o else c_c - c_l
+                            body = abs(c_c - c_o)
+                            ratio_ok = (body >= 0.002) if (l_wick >= 0.100) else (body >= 0.003)
+                            if ratio_ok:
+                                if c_c > c_o:
                                     entry = c_c
                                     init_sl = c_l
                                     sl_pct = (abs(entry - init_sl) / entry) * 100.0
@@ -447,8 +465,12 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                             
                                         if sl_pct < 0.055:
                                             ext_sl = entry * (1.0 - 0.00055)
+                                        elif sl_pct < 0.065:
+                                            ext_sl = init_sl - 0.006
+                                        elif sl_pct < 0.075:
+                                            ext_sl = init_sl - 0.007
                                         else:
-                                            buffer_p = 0.006 + int((sl_pct - 0.055) / 0.010) * 0.001
+                                            buffer_p = 0.014 + int((sl_pct - 0.075) / 0.010) * 0.001
                                             ext_sl = init_sl - buffer_p
                                         risk = entry - ext_sl
                                         tp = entry + 5.0 * risk
@@ -463,31 +485,155 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                             "sl_percentage": round(sl_pct, 3),
                                             "tp_percentage": round(sl_pct * 5.0, 3),
                                             "status": f"Active Signal ({s_name} Long)",
-                                            "details": f"Confirmed M15 Selfsweep in {s_name} session."
+                                            "details": f"Confirmed M15 Selfsweep in {s_name} session (1:5.0 RRR, upgraded SL extension)."
                                         })
                                         return result
+                                else:
+                                    sweep_ext = c_l
+                                    wait_cnt = 0
+                                    state = 'WAIT_BULLISH'
+                            else:
+                                ext_low, ceiling, state = c_l, c_h, 'SEEK_CC'
+                    elif c_l <= ext_low:
+                        sweep_ext = c_l
+                        wait_cnt = 0
+                        state = 'WAIT_SWEEP_AFTER_TAP'
+                    else:
+                        ceiling = max(ceiling, c_h)
+                elif state == 'WAIT_SWEEP_AFTER_TAP':
+                    wait_cnt += 1
+                    if wait_cnt > 3 or c_c < ext_low:
+                        ext_low = min(sweep_ext, c_l)
+                        ceiling = c_h
+                        state = 'SEEK_CC'
+                    else:
+                        if c_l <= ext_low - 0.001:
+                            if c_c <= ext_low:
+                                ext_low, ceiling, state = c_l, c_h, 'SEEK_CC'
+                            else:
+                                sweep_ext = min(sweep_ext, c_l)
+                                l_wick = c_o - c_l if c_c > c_o else c_c - c_l
+                                body = abs(c_c - c_o)
+                                ratio_ok = (body >= 0.002) if (l_wick >= 0.100) else (body >= 0.003)
+                                if ratio_ok:
+                                    if c_c > c_o:
+                                        entry = c_c
+                                        init_sl = sweep_ext
+                                        sl_pct = (abs(entry - init_sl) / entry) * 100.0
+                                        if 0.045 <= sl_pct <= 0.154:
+                                            if is_tuesday:
+                                                result.update({
+                                                    "status": "Skipped (Tuesday Rule)",
+                                                    "details": f"Setup formed ({s_name} Long @ {entry:.3f}), but Tuesdays are strictly excluded from live execution by strategy rules."
+                                                })
+                                                return result
+                                            if sl_pct < 0.055:
+                                                ext_sl = entry * (1.0 - 0.00055)
+                                            elif sl_pct < 0.065:
+                                                ext_sl = init_sl - 0.006
+                                            elif sl_pct < 0.075:
+                                                ext_sl = init_sl - 0.007
+                                            else:
+                                                buffer_p = 0.014 + int((sl_pct - 0.075) / 0.010) * 0.001
+                                                ext_sl = init_sl - buffer_p
+                                            risk = entry - ext_sl
+                                            tp = entry + 5.0 * risk
+                                            entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
+                                            entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
+                                            result.update({
+                                                "direction": "long",
+                                                "entry_price": round(entry, 3),
+                                                "entry_time_ist": entry_t_str,
+                                                "sl_price": round(ext_sl, 3),
+                                                "tp_price": round(tp, 3),
+                                                "sl_percentage": round(sl_pct, 3),
+                                                "tp_percentage": round(sl_pct * 5.0, 3),
+                                                "status": f"Active Signal ({s_name} Long)",
+                                                "details": f"Confirmed M15 Selfsweep in {s_name} session (1:5.0 RRR, upgraded SL extension)."
+                                            })
+                                            return result
+                                    else:
+                                        wait_cnt = 0
+                                        state = 'WAIT_BULLISH'
+                                else:
+                                    ext_low, ceiling, state = c_l, c_h, 'SEEK_CC'
+                        else:
+                            sweep_ext = min(sweep_ext, c_l)
+                elif state == 'WAIT_BULLISH':
+                    wait_cnt += 1
+                    if wait_cnt > 3 or c_c < sweep_ext:
+                        ext_low = min(sweep_ext, c_l)
+                        ceiling = c_h
+                        state = 'SEEK_CC'
+                    else:
+                        sweep_ext = min(sweep_ext, c_l)
+                        if c_c > c_o:
+                            entry = c_c
+                            init_sl = sweep_ext
+                            sl_pct = (abs(entry - init_sl) / entry) * 100.0
+                            if 0.045 <= sl_pct <= 0.154:
+                                if is_tuesday:
+                                    result.update({
+                                        "status": "Skipped (Tuesday Rule)",
+                                        "details": f"Setup formed ({s_name} Long @ {entry:.3f}), but Tuesdays are strictly excluded from live execution by strategy rules."
+                                    })
+                                    return result
+                                if sl_pct < 0.055:
+                                    ext_sl = entry * (1.0 - 0.00055)
+                                elif sl_pct < 0.065:
+                                    ext_sl = init_sl - 0.006
+                                elif sl_pct < 0.075:
+                                    ext_sl = init_sl - 0.007
+                                else:
+                                    buffer_p = 0.014 + int((sl_pct - 0.075) / 0.010) * 0.001
+                                    ext_sl = init_sl - buffer_p
+                                risk = entry - ext_sl
+                                tp = entry + 5.0 * risk
+                                entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
+                                entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
+                                result.update({
+                                    "direction": "long",
+                                    "entry_price": round(entry, 3),
+                                    "entry_time_ist": entry_t_str,
+                                    "sl_price": round(ext_sl, 3),
+                                    "tp_price": round(tp, 3),
+                                    "sl_percentage": round(sl_pct, 3),
+                                    "tp_percentage": round(sl_pct * 5.0, 3),
+                                    "status": f"Active Signal ({s_name} Long)",
+                                    "details": f"Confirmed M15 Selfsweep in {s_name} session (1:5.0 RRR, upgraded SL extension)."
+                                })
+                                return result
                                         
             # Short Check
             ext_high, floor, state = highs[0], lows[0], 'SEEK_CC'
+            sweep_ext = None
+            wait_cnt = 0
             for i in range(1, N):
                 c_o, c_h, c_l, c_c = opens[i], highs[i], lows[i], closes[i]
                 if state == 'SEEK_CC':
-                    if c_h >= ext_high: ext_high, floor = c_h, c_l
+                    if c_h >= ext_high:
+                        ext_high, floor = c_h, c_l
                     else:
-                        if c_c < floor: state = 'WAIT_SUSTAIN'
+                        if c_c < floor:
+                            state = 'WAIT_OPPOSITE'
                         floor = min(floor, c_l)
-                elif state == 'WAIT_SUSTAIN':
-                    if c_h >= ext_high: ext_high, floor, state = c_h, c_l, 'SEEK_CC'
-                    else: state = 'WAIT_SWEEP'
+                elif state == 'WAIT_OPPOSITE':
+                    if c_h >= ext_high:
+                        ext_high, floor, state = c_h, c_l, 'SEEK_CC'
+                    else:
+                        floor = min(floor, c_l)
+                        if c_c > c_o:  # Bullish opposite candle formed before level touch
+                            state = 'WAIT_SWEEP'
                 elif state == 'WAIT_SWEEP':
                     if c_h >= ext_high + 0.001:
-                        if c_c >= ext_high: ext_high, floor, state = c_h, c_l, 'SEEK_CC'
+                        if c_c >= ext_high:
+                            ext_high, floor, state = c_h, c_l, 'SEEK_CC'
                         else:
-                            if c_c < c_o:
-                                body = c_o - c_c
-                                u_wick = c_h - c_o
-                                ratio_ok = (body >= 0.002) if (u_wick >= 0.100) else (body >= 0.003)
-                                if ratio_ok:
+                            u_wick = c_h - c_o if c_c < c_o else c_h - c_c
+                            body = abs(c_o - c_c)
+                            ratio_ok = (body >= 0.002) if (u_wick >= 0.100) else (body >= 0.003)
+                            if ratio_ok:
+                                if c_c < c_o:
                                     entry = c_c
                                     init_sl = c_h
                                     sl_pct = (abs(entry - init_sl) / entry) * 100.0
@@ -501,8 +647,12 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                             
                                         if sl_pct < 0.055:
                                             ext_sl = entry * (1.0 + 0.00055)
+                                        elif sl_pct < 0.065:
+                                            ext_sl = init_sl + 0.006
+                                        elif sl_pct < 0.075:
+                                            ext_sl = init_sl + 0.007
                                         else:
-                                            buffer_p = 0.006 + int((sl_pct - 0.055) / 0.010) * 0.001
+                                            buffer_p = 0.014 + int((sl_pct - 0.075) / 0.010) * 0.001
                                             ext_sl = init_sl + buffer_p
                                         risk = ext_sl - entry
                                         tp = entry - 5.0 * risk
@@ -517,9 +667,124 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                             "sl_percentage": round(sl_pct, 3),
                                             "tp_percentage": round(sl_pct * 5.0, 3),
                                             "status": f"Active Signal ({s_name} Short)",
-                                            "details": f"Confirmed M15 Selfsweep in {s_name} session."
+                                            "details": f"Confirmed M15 Selfsweep in {s_name} session (1:5.0 RRR, upgraded SL extension)."
                                         })
                                         return result
+                                else:
+                                    sweep_ext = c_h
+                                    wait_cnt = 0
+                                    state = 'WAIT_BEARISH'
+                            else:
+                                ext_high, floor, state = c_h, c_l, 'SEEK_CC'
+                    elif c_h >= ext_high:
+                        sweep_ext = c_h
+                        wait_cnt = 0
+                        state = 'WAIT_SWEEP_AFTER_TAP'
+                    else:
+                        floor = min(floor, c_l)
+                elif state == 'WAIT_SWEEP_AFTER_TAP':
+                    wait_cnt += 1
+                    if wait_cnt > 3 or c_c > ext_high:
+                        ext_high = max(sweep_ext, c_h)
+                        floor = c_l
+                        state = 'SEEK_CC'
+                    else:
+                        if c_h >= ext_high + 0.001:
+                            if c_c >= ext_high:
+                                ext_high, floor, state = c_h, c_l, 'SEEK_CC'
+                            else:
+                                sweep_ext = max(sweep_ext, c_h)
+                                u_wick = c_h - c_o if c_c < c_o else c_h - c_c
+                                body = abs(c_o - c_c)
+                                ratio_ok = (body >= 0.002) if (u_wick >= 0.100) else (body >= 0.003)
+                                if ratio_ok:
+                                    if c_c < c_o:
+                                        entry = c_c
+                                        init_sl = sweep_ext
+                                        sl_pct = (abs(entry - init_sl) / entry) * 100.0
+                                        if 0.045 <= sl_pct <= 0.154:
+                                            if is_tuesday:
+                                                result.update({
+                                                    "status": "Skipped (Tuesday Rule)",
+                                                    "details": f"Setup formed ({s_name} Short @ {entry:.3f}), but Tuesdays are strictly excluded from live execution by strategy rules."
+                                                })
+                                                return result
+                                            if sl_pct < 0.055:
+                                                ext_sl = entry * (1.0 + 0.00055)
+                                            elif sl_pct < 0.065:
+                                                ext_sl = init_sl + 0.006
+                                            elif sl_pct < 0.075:
+                                                ext_sl = init_sl + 0.007
+                                            else:
+                                                buffer_p = 0.014 + int((sl_pct - 0.075) / 0.010) * 0.001
+                                                ext_sl = init_sl + buffer_p
+                                            risk = ext_sl - entry
+                                            tp = entry - 5.0 * risk
+                                            entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
+                                            entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
+                                            result.update({
+                                                "direction": "short",
+                                                "entry_price": round(entry, 3),
+                                                "entry_time_ist": entry_t_str,
+                                                "sl_price": round(ext_sl, 3),
+                                                "tp_price": round(tp, 3),
+                                                "sl_percentage": round(sl_pct, 3),
+                                                "tp_percentage": round(sl_pct * 5.0, 3),
+                                                "status": f"Active Signal ({s_name} Short)",
+                                                "details": f"Confirmed M15 Selfsweep in {s_name} session (1:5.0 RRR, upgraded SL extension)."
+                                            })
+                                            return result
+                                    else:
+                                        wait_cnt = 0
+                                        state = 'WAIT_BEARISH'
+                                else:
+                                    ext_high, floor, state = c_h, c_l, 'SEEK_CC'
+                        else:
+                            sweep_ext = max(sweep_ext, c_h)
+                elif state == 'WAIT_BEARISH':
+                    wait_cnt += 1
+                    if wait_cnt > 3 or c_c > sweep_ext:
+                        ext_high = max(sweep_ext, c_h)
+                        floor = c_l
+                        state = 'SEEK_CC'
+                    else:
+                        sweep_ext = max(sweep_ext, c_h)
+                        if c_c < c_o:
+                            entry = c_c
+                            init_sl = sweep_ext
+                            sl_pct = (abs(entry - init_sl) / entry) * 100.0
+                            if 0.045 <= sl_pct <= 0.154:
+                                if is_tuesday:
+                                    result.update({
+                                        "status": "Skipped (Tuesday Rule)",
+                                        "details": f"Setup formed ({s_name} Short @ {entry:.3f}), but Tuesdays are strictly excluded from live execution by strategy rules."
+                                    })
+                                    return result
+                                if sl_pct < 0.055:
+                                    ext_sl = entry * (1.0 + 0.00055)
+                                elif sl_pct < 0.065:
+                                    ext_sl = init_sl + 0.006
+                                elif sl_pct < 0.075:
+                                    ext_sl = init_sl + 0.007
+                                else:
+                                    buffer_p = 0.014 + int((sl_pct - 0.075) / 0.010) * 0.001
+                                    ext_sl = init_sl + buffer_p
+                                risk = ext_sl - entry
+                                tp = entry - 5.0 * risk
+                                entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
+                                entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
+                                result.update({
+                                    "direction": "short",
+                                    "entry_price": round(entry, 3),
+                                    "entry_time_ist": entry_t_str,
+                                    "sl_price": round(ext_sl, 3),
+                                    "tp_price": round(tp, 3),
+                                    "sl_percentage": round(sl_pct, 3),
+                                    "tp_percentage": round(sl_pct * 5.0, 3),
+                                    "status": f"Active Signal ({s_name} Short)",
+                                    "details": f"Confirmed M15 Selfsweep in {s_name} session (1:5.0 RRR, upgraded SL extension)."
+                                })
+                                return result
                                         
         if is_tuesday:
             result["status"] = "Skipped (Tuesday Rule)"
