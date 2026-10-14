@@ -677,15 +677,16 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
             body = abs(c_c - prev_c)
             risk_points = abs(c_c - init_sl)
             sl_pct = (risk_points / c_c) * 100.0
-            sl_in_range = (0.045 - 1e-9 <= sl_pct <= 0.154 + 1e-9)
+            sl_pct_rounded = round(sl_pct, 3)
+            sl_in_range = (0.045 <= sl_pct_rounded <= 0.154)
 
             if is_wed_thu:
-                if body >= 0.001 - 1e-9 and sl_in_range:
+                if round(body, 3) >= 0.001 and sl_in_range:
                     return 'VALID_ENTER', sl_pct, body
                 else:
                     return 'INVALIDATED', sl_pct, body
             elif is_mon_fri:
-                if body >= 0.005 - 1e-9:
+                if round(body, 3) >= 0.005:
                     if sl_in_range:
                         return 'VALID_ENTER', sl_pct, body
                     else:
@@ -703,28 +704,29 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
         def extend_sl_new(entry, initial_sl, direction):
             risk_points = abs(entry - initial_sl)
             sl_pct = (risk_points / entry) * 100.0
-            if sl_pct < 0.045 - 1e-9 or sl_pct > 0.154 + 1e-9:
+            sl_pct_rounded = round(sl_pct, 3)
+            if sl_pct_rounded < 0.045 or sl_pct_rounded > 0.154:
                 return None, sl_pct
             ext_sl = initial_sl
-            if 0.045 <= sl_pct < 0.055:
+            if sl_pct < 0.055:
                 ext_sl = entry * (1.0 - 0.00055) if direction == 'long' else entry * (1.0 + 0.00055)
-            elif 0.055 <= sl_pct < 0.065:
+            elif sl_pct < 0.065:
                 ext_sl = initial_sl - 0.006 if direction == 'long' else initial_sl + 0.006
-            elif 0.065 <= sl_pct < 0.075:
+            elif sl_pct < 0.075:
                 ext_sl = initial_sl - 0.007 if direction == 'long' else initial_sl + 0.007
-            elif 0.075 <= sl_pct < 0.085:
+            elif sl_pct < 0.085:
                 ext_sl = initial_sl - 0.014 if direction == 'long' else initial_sl + 0.014
-            elif 0.085 <= sl_pct < 0.095:
+            elif sl_pct < 0.095:
                 ext_sl = initial_sl - 0.015 if direction == 'long' else initial_sl + 0.015
-            elif 0.095 <= sl_pct < 0.105:
+            elif sl_pct < 0.105:
                 ext_sl = initial_sl - 0.016 if direction == 'long' else initial_sl + 0.016
-            elif 0.105 <= sl_pct < 0.115:
+            elif sl_pct < 0.115:
                 ext_sl = initial_sl - 0.017 if direction == 'long' else initial_sl + 0.017
-            elif 0.115 <= sl_pct < 0.125:
+            elif sl_pct < 0.125:
                 ext_sl = initial_sl - 0.018 if direction == 'long' else initial_sl + 0.018
-            elif 0.125 <= sl_pct < 0.135:
+            elif sl_pct < 0.135:
                 ext_sl = initial_sl - 0.019 if direction == 'long' else initial_sl + 0.019
-            elif 0.135 <= sl_pct < 0.145:
+            elif sl_pct < 0.145:
                 ext_sl = initial_sl - 0.020 if direction == 'long' else initial_sl + 0.020
             else:
                 ext_sl = initial_sl - 0.021 if direction == 'long' else initial_sl + 0.021
@@ -740,7 +742,6 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
             # Long Check
             ext_low, ceiling, state = lows[0], highs[0], 'SEEK_CC'
             sweep_ext = None
-            wait_cnt = 0
             for i in range(1, N):
                 c_o, c_h, c_l, c_c = opens[i], highs[i], lows[i], closes[i]
                 prev_c = closes[i-1]
@@ -763,11 +764,12 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                         if c_c <= ext_low + 1e-9:
                             ext_low, ceiling, state = c_l, c_h, 'SEEK_CC'
                         else:
+                            sweep_ext = c_l
                             if c_c > c_o:
-                                decision, sl_pct, body = evaluate_entry_candidate(c_c, prev_c, c_l)
+                                decision, sl_pct, body = evaluate_entry_candidate(c_c, prev_c, sweep_ext)
                                 if decision == 'VALID_ENTER':
                                     entry = c_c
-                                    init_sl = c_l
+                                    init_sl = sweep_ext
                                     if is_tuesday:
                                         result.update({
                                             "status": "Skipped (Tuesday Rule)",
@@ -792,24 +794,18 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                     })
                                     return result
                                 elif decision == 'WAIT_NEXT':
-                                    sweep_ext = c_l
-                                    wait_cnt = 0
                                     state = 'WAIT_BULLISH'
                                 else:
                                     ext_low, ceiling, state = c_l, c_h, 'SEEK_CC'
                             else:
-                                sweep_ext = c_l
-                                wait_cnt = 0
                                 state = 'WAIT_BULLISH'
                     elif c_l <= ext_low + 1e-9:
                         sweep_ext = c_l
-                        wait_cnt = 0
                         state = 'WAIT_SWEEP_AFTER_TAP'
                     else:
                         ceiling = max(ceiling, c_h)
                 elif state == 'WAIT_SWEEP_AFTER_TAP':
-                    wait_cnt += 1
-                    if wait_cnt > 3 or c_c < ext_low:
+                    if c_c < ext_low:
                         ext_low, ceiling, state = min(sweep_ext, c_l), c_h, 'SEEK_CC'
                     else:
                         if c_l <= ext_low - 0.001 + 1e-9:
@@ -846,18 +842,15 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                         })
                                         return result
                                     elif decision == 'WAIT_NEXT':
-                                        wait_cnt = 0
                                         state = 'WAIT_BULLISH'
                                     else:
                                         ext_low, ceiling, state = c_l, c_h, 'SEEK_CC'
                                 else:
-                                    wait_cnt = 0
                                     state = 'WAIT_BULLISH'
                         else:
                             sweep_ext = min(sweep_ext, c_l)
                 elif state == 'WAIT_BULLISH':
-                    wait_cnt += 1
-                    if wait_cnt > 3 or c_c < sweep_ext:
+                    if c_c < sweep_ext:
                         ext_low, ceiling, state = min(sweep_ext, c_l), c_h, 'SEEK_CC'
                     else:
                         sweep_ext = min(sweep_ext, c_l)
@@ -887,7 +880,7 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                     "tp_percentage": round(sl_pct * 5.0, 3),
                                     "status": f"Active Signal ({s_name} Long)",
                                     "details": f"Confirmed M15 Selfsweep in {s_name} session (1:5.0 RRR, upgraded SL extension, day-of-week entry engine)."
-                                    })
+                                })
                                 return result
                             elif decision == 'WAIT_NEXT':
                                 continue
@@ -897,7 +890,6 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
             # Short Check
             ext_high, floor, state = highs[0], lows[0], 'SEEK_CC'
             sweep_ext = None
-            wait_cnt = 0
             for i in range(1, N):
                 c_o, c_h, c_l, c_c = opens[i], highs[i], lows[i], closes[i]
                 prev_c = closes[i-1]
@@ -920,11 +912,12 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                         if c_c >= ext_high - 1e-9:
                             ext_high, floor, state = c_h, c_l, 'SEEK_CC'
                         else:
+                            sweep_ext = c_h
                             if c_c < c_o:
-                                decision, sl_pct, body = evaluate_entry_candidate(c_c, prev_c, c_h)
+                                decision, sl_pct, body = evaluate_entry_candidate(c_c, prev_c, sweep_ext)
                                 if decision == 'VALID_ENTER':
                                     entry = c_c
-                                    init_sl = c_h
+                                    init_sl = sweep_ext
                                     if is_tuesday:
                                         result.update({
                                             "status": "Skipped (Tuesday Rule)",
@@ -949,24 +942,18 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                     })
                                     return result
                                 elif decision == 'WAIT_NEXT':
-                                    sweep_ext = c_h
-                                    wait_cnt = 0
                                     state = 'WAIT_BEARISH'
                                 else:
                                     ext_high, floor, state = c_h, c_l, 'SEEK_CC'
                             else:
-                                sweep_ext = c_h
-                                wait_cnt = 0
                                 state = 'WAIT_BEARISH'
                     elif c_h >= ext_high - 1e-9:
                         sweep_ext = c_h
-                        wait_cnt = 0
                         state = 'WAIT_SWEEP_AFTER_TAP'
                     else:
                         floor = min(floor, c_l)
                 elif state == 'WAIT_SWEEP_AFTER_TAP':
-                    wait_cnt += 1
-                    if wait_cnt > 3 or c_c > ext_high:
+                    if c_c > ext_high:
                         ext_high, floor, state = max(sweep_ext, c_h), c_l, 'SEEK_CC'
                     else:
                         if c_h >= ext_high + 0.001 - 1e-9:
@@ -1003,18 +990,15 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                         })
                                         return result
                                     elif decision == 'WAIT_NEXT':
-                                        wait_cnt = 0
                                         state = 'WAIT_BEARISH'
                                     else:
                                         ext_high, floor, state = c_h, c_l, 'SEEK_CC'
                                 else:
-                                    wait_cnt = 0
                                     state = 'WAIT_BEARISH'
                         else:
                             sweep_ext = max(sweep_ext, c_h)
                 elif state == 'WAIT_BEARISH':
-                    wait_cnt += 1
-                    if wait_cnt > 3 or c_c > sweep_ext:
+                    if c_c > sweep_ext:
                         ext_high, floor, state = max(sweep_ext, c_h), c_l, 'SEEK_CC'
                     else:
                         sweep_ext = max(sweep_ext, c_h)
