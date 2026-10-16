@@ -1,0 +1,19 @@
+# Data files & archives
+*.csv
+*.zip
+*.exe
+*.log
+*.txt
+*.png
+*.jpg
+!public/icon.jpg
+!public/icon.png
+!app_logo.png
+
+# Python & caches
+__pycache__/
+*.pyc
+.system_generated/
+scratch/
+.idea/
+.vscode/
