@@ -895,13 +895,30 @@
           const detail = document.getElementById('news-shield-detail');
           const badge = document.getElementById('news-shield-badge');
           if (data && data.events && data.events.length > 0) {
-            const evCount = data.events.length;
-            const evList = data.events.map(e => `${e.title} (${e.dt_ist.slice(11, 16)} IST)`).join(', ');
-            detail.innerHTML = `<span class="text-amber-300 font-bold">⚠️ ${evCount} Big-4 News Event${evCount > 1 ? 's' : ''}:</span> <span class="text-slate-300 font-semibold">${evList}</span>`;
-            badge.textContent = `Auto-Exit Armed (5m)`;
-            badge.className = "inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30";
+            const upcomingEvents = data.events.filter(e => !e.is_passed);
+            const passedEvents = data.events.filter(e => e.is_passed);
+
+            if (upcomingEvents.length > 0) {
+              const evCount = upcomingEvents.length;
+              const evList = upcomingEvents.map(e => {
+                const syms = e.symbols && e.symbols.length ? `[${e.symbols.join('/')}] ` : '';
+                return `${syms}${e.title} (${e.dt_ist.slice(11, 16)} IST)`;
+              }).join(', ');
+              detail.innerHTML = `<span class="text-amber-300 font-bold">⚠️ ${evCount} Prohibited News Event${evCount > 1 ? 's' : ''}:</span> <span class="text-slate-300 font-semibold">${evList}</span>`;
+              badge.textContent = `Auto-Exit Armed (5m)`;
+              badge.className = "inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30";
+            } else if (passedEvents.length > 0) {
+              const evList = passedEvents.map(e => `${e.title} (${e.dt_ist.slice(11, 16)} IST)`).join(', ');
+              detail.innerHTML = `<span class="text-emerald-400 font-medium">✅ All news events for ${label} have passed (${evList}). Holding permitted across all instruments.</span>`;
+              badge.textContent = `Passed • Clear`;
+              badge.className = "inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+            } else {
+              detail.textContent = `No prohibited news events on ${label} (Holding permitted)`;
+              badge.textContent = `Clear`;
+              badge.className = "inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+            }
           } else {
-            detail.textContent = `No Big 4 news events on ${label} (Holding permitted)`;
+            detail.textContent = `No prohibited news events on ${label} (Holding permitted)`;
             badge.textContent = `Clear`;
             badge.className = "inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
           }
