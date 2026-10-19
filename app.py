@@ -279,8 +279,8 @@ def fetch_oanda_candles(instrument: str, granularity: str, target_date: datetime
     base_url = get_oanda_base_url()
     headers = {"Authorization": f"Bearer {token}"}
     
-    # Start from previous day 00:00 UTC to ensure full Asian/London sessions are captured
-    start_utc = dt(target_date.year, target_date.month, target_date.day, 0, 0, 0, tzinfo=timezone.utc) - timedelta(days=1)
+    # Start from 2 days back 00:00 UTC to ensure full Asian/London sessions and Monday Sunday evening NY sessions are captured
+    start_utc = dt(target_date.year, target_date.month, target_date.day, 0, 0, 0, tzinfo=timezone.utc) - timedelta(days=2)
     now_utc = dt.now(timezone.utc)
     
     params = {
@@ -1246,236 +1246,57 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict | list[dict]:
             # Mode: ARMED (ENTRY SCAN)
             if mode == "armed":
                 if direction == "long":
-                    if idx > touch_idx:
-                        if c_c < lowest_prev or abs(c_c - lowest_prev) < 1e-6:
-                            result["status"] = "Invalidated (Rolling Low Breach)"
-                            result["details"] = f"Candle at {t_curr.strftime('%H:%M')} closed beyond rolling sweep low. Setup dead."
-                            return result
-                            
-                    lowest_prev = lowest_wick
                     lowest_wick = min(lowest_wick, c_l)
                     if c_l <= lvl_m04:
                         touched_04 = True
                         
                     is_bullish = c_c > c_o
-                    close_diff = abs(c_c - prev_c)
-                    gap_pct = (close_diff / prev_c) * 100.0 if prev_c > 0 else 0.0
-                    is_sweep = c_l < prev_l
-                    
-                    if is_sweep and abs(c_c - prev_c) < 1e-6:
-                        result["status"] = "Invalidated (Sweep Equal Close)"
-                        result["details"] = f"Candle at {t_curr.strftime('%H:%M')} swept previous low but closed equal. Setup dead."
-                        return result
-                        
-                    if abs(c_c - prev_c) < 1e-6:
-                        continue
-                        
-                    sweep_ok = (c_c > prev_c) if is_sweep else True
-                    gap_ok = gap_pct >= 0.01
-                    
-                    if is_bullish and sweep_ok and gap_ok:
+                    if is_bullish:
                         sl = (lowest_wick - 0.00001) if touched_04 else (lvl_m04 - 0.00002)
                         risk = c_c - sl
                         sl_pct = (risk / c_c) * 100.0
                         
-                        if sl_pct < 0.035 or sl_pct > 0.154:
-                            result["status"] = "Skipped (SL Out of Range)"
-                            result["details"] = f"SL {sl_pct:.3f}% outside 0.035% - 0.154% corridor. Setup dead."
+                        if 0.035 <= sl_pct <= 0.154:
+                            tp = c_c + 3.75 * risk
+                            entry_close_ist = t_curr + timedelta(minutes=15)
+                            result.update({
+                                "direction": "long",
+                                "entry_price": round(c_c, 5),
+                                "entry_time_ist": entry_close_ist.strftime("%Y-%m-%dT%H:%M"),
+                                "sl_price": round(sl, 5),
+                                "tp_price": round(tp, 5),
+                                "sl_percentage": round(sl_pct, 3),
+                                "tp_percentage": round(sl_pct * 3.75, 3),
+                                "status": "Active Signal (London Long)",
+                                "details": f"Level -0.2 swept ({lvl_m02:.5f}) with confirmed rejection."
+                            })
                             return result
-                            
-                        tp = c_c + 3.75 * risk
-                        entry_close_ist = t_curr + timedelta(minutes=15)
-                        entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
-                        entry1 = dict(result)
-                        entry1.update({
-                            "direction": "long",
-                            "entry_no": 1,
-                            "entry_price": round(c_c, 5),
-                            "entry_time_ist": entry_t_str,
-                            "sl_price": round(sl, 5),
-                            "tp_price": round(tp, 5),
-                            "sl_percentage": round(sl_pct, 3),
-                            "tp_percentage": round(sl_pct * 3.75, 3),
-                            "status": "Active Signal (London Long)",
-                            "details": f"Level -0.2 swept ({lvl_m02:.5f}) with confirmed rejection."
-                        })
-                        
-                        # Evaluate lifecycle of Entry 1 across subsequent London candles to check for Double Entry
-                        resume_idx = None
-                        for j in range(idx + 1, len(lon_df)):
-                            cand = lon_df.iloc[j]
-                            if cand['low'] <= sl:
-                                if cand['close'] < sl:
-                                    # Closed beyond SL - invalidates further London entries
-                                    return entry1
-                                resume_idx = j + 1
-                                break
-                            elif cand['high'] >= tp:
-                                return entry1
-                                
-                        if resume_idx is None:
-                            return entry1
-                            
-                        # Scan remaining London candles for Entry 2 (Double Entry)
-                        lowest_wick = min(lowest_wick, lon_df.iloc[:resume_idx]['low'].min())
-                        lowest_prev = lowest_wick
-                        touched_04 = (lowest_wick <= lvl_m04)
-                        
-                        for k in range(resume_idx, len(lon_df)):
-                            r_k = lon_df.iloc[k]
-                            k_o, k_h, k_l, k_c = float(r_k['open']), float(r_k['high']), float(r_k['low']), float(r_k['close'])
-                            k_prev = lon_df.iloc[k-1]
-                            p_c, p_l, p_h = float(k_prev['close']), float(k_prev['low']), float(k_prev['high'])
-                            
-                            lowest_prev = lowest_wick
-                            lowest_wick = min(lowest_wick, k_l)
-                            if k_l <= lvl_m04: touched_04 = True
-                            
-                            k_bullish = k_c > k_o
-                            k_gap_pct = (abs(k_c - p_c) / p_c) * 100.0 if p_c > 0 else 0.0
-                            k_sweep = k_l < p_l
-                            k_sweep_ok = (k_c > p_c) if k_sweep else True
-                            k_gap_ok = k_gap_pct >= 0.01
-                            
-                            if k_bullish and k_sweep_ok and k_gap_ok:
-                                sl2 = (lowest_wick - 0.00001) if touched_04 else (lvl_m04 - 0.00002)
-                                risk2 = k_c - sl2
-                                sl2_pct = (risk2 / k_c) * 100.0
-                                if 0.035 <= sl2_pct <= 0.154:
-                                    tp2 = k_c + 3.75 * risk2
-                                    e2_close_ist = r_k['dt_ist'] + timedelta(minutes=15)
-                                    entry2 = dict(result)
-                                    entry2.update({
-                                        "direction": "long",
-                                        "entry_no": 2,
-                                        "is_double_entry": True,
-                                        "entry_price": round(k_c, 5),
-                                        "entry_time_ist": e2_close_ist.strftime("%Y-%m-%dT%H:%M"),
-                                        "sl_price": round(sl2, 5),
-                                        "tp_price": round(tp2, 5),
-                                        "sl_percentage": round(sl2_pct, 3),
-                                        "tp_percentage": round(sl2_pct * 3.75, 3),
-                                        "status": "Active Signal (London Long - Entry 2)",
-                                        "details": f"Level -0.2 swept ({lvl_m02:.5f}) confirmed rejection | Entry #2 (Double Entry) after Entry #1 SL Hit."
-                                    })
-                                    return [entry1, entry2]
-                        return entry1
-                        
                 else: # short
-                    if idx > touch_idx:
-                        if c_c > highest_prev or abs(c_c - highest_prev) < 1e-6:
-                            result["status"] = "Invalidated (Rolling High Breach)"
-                            result["details"] = f"Candle at {t_curr.strftime('%H:%M')} closed beyond rolling sweep high. Setup dead."
-                            return result
-                            
-                    highest_prev = highest_wick
                     highest_wick = max(highest_wick, c_h)
                     if c_h >= lvl_m04:
                         touched_04 = True
                         
                     is_bearish = c_c < c_o
-                    close_diff = abs(c_c - prev_c)
-                    gap_pct = (close_diff / prev_c) * 100.0 if prev_c > 0 else 0.0
-                    is_sweep = c_h > prev_h
-                    
-                    if is_sweep and abs(c_c - prev_c) < 1e-6:
-                        result["status"] = "Invalidated (Sweep Equal Close)"
-                        result["details"] = f"Candle at {t_curr.strftime('%H:%M')} swept previous high but closed equal. Setup dead."
-                        return result
-                        
-                    if abs(c_c - prev_c) < 1e-6:
-                        continue
-                        
-                    sweep_ok = (c_c < prev_c) if is_sweep else True
-                    gap_ok = gap_pct >= 0.01
-                    
-                    if is_bearish and sweep_ok and gap_ok:
+                    if is_bearish:
                         sl = (highest_wick + 0.00001) if touched_04 else (lvl_m04 + 0.00002)
                         risk = sl - c_c
                         sl_pct = (risk / c_c) * 100.0
                         
-                        if sl_pct < 0.035 or sl_pct > 0.154:
-                            result["status"] = "Skipped (SL Out of Range)"
-                            result["details"] = f"SL {sl_pct:.3f}% outside 0.035% - 0.154% corridor. Setup dead."
+                        if 0.035 <= sl_pct <= 0.154:
+                            tp = c_c - 3.75 * risk
+                            entry_close_ist = t_curr + timedelta(minutes=15)
+                            result.update({
+                                "direction": "short",
+                                "entry_price": round(c_c, 5),
+                                "entry_time_ist": entry_close_ist.strftime("%Y-%m-%dT%H:%M"),
+                                "sl_price": round(sl, 5),
+                                "tp_price": round(tp, 5),
+                                "sl_percentage": round(sl_pct, 3),
+                                "tp_percentage": round(sl_pct * 3.75, 3),
+                                "status": "Active Signal (London Short)",
+                                "details": f"Level +0.2 swept ({lvl_m02:.5f}) with confirmed rejection."
+                            })
                             return result
-                            
-                        tp = c_c - 3.75 * risk
-                        entry_close_ist = t_curr + timedelta(minutes=15)
-                        entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
-                        entry1 = dict(result)
-                        entry1.update({
-                            "direction": "short",
-                            "entry_no": 1,
-                            "entry_price": round(c_c, 5),
-                            "entry_time_ist": entry_t_str,
-                            "sl_price": round(sl, 5),
-                            "tp_price": round(tp, 5),
-                            "sl_percentage": round(sl_pct, 3),
-                            "tp_percentage": round(sl_pct * 3.75, 3),
-                            "status": "Active Signal (London Short)",
-                            "details": f"Level +0.2 swept ({lvl_m02:.5f}) with confirmed rejection."
-                        })
-                        
-                        # Evaluate lifecycle of Entry 1 across subsequent London candles to check for Double Entry
-                        resume_idx = None
-                        for j in range(idx + 1, len(lon_df)):
-                            cand = lon_df.iloc[j]
-                            if cand['high'] >= sl:
-                                if cand['close'] > sl:
-                                    # Closed beyond SL - invalidates further London entries
-                                    return entry1
-                                resume_idx = j + 1
-                                break
-                            elif cand['low'] <= tp:
-                                return entry1
-                                
-                        if resume_idx is None:
-                            return entry1
-                            
-                        # Scan remaining London candles for Entry 2 (Double Entry)
-                        highest_wick = max(highest_wick, lon_df.iloc[:resume_idx]['high'].max())
-                        highest_prev = highest_wick
-                        touched_04 = (highest_wick >= lvl_m04)
-                        
-                        for k in range(resume_idx, len(lon_df)):
-                            r_k = lon_df.iloc[k]
-                            k_o, k_h, k_l, k_c = float(r_k['open']), float(r_k['high']), float(r_k['low']), float(r_k['close'])
-                            k_prev = lon_df.iloc[k-1]
-                            p_c, p_l, p_h = float(k_prev['close']), float(k_prev['low']), float(k_prev['high'])
-                            
-                            highest_prev = highest_wick
-                            highest_wick = max(highest_wick, k_h)
-                            if k_h >= lvl_m04: touched_04 = True
-                            
-                            k_bearish = k_c < k_o
-                            k_gap_pct = (abs(k_c - p_c) / p_c) * 100.0 if p_c > 0 else 0.0
-                            k_sweep = k_h > p_h
-                            k_sweep_ok = (k_c < p_c) if k_sweep else True
-                            k_gap_ok = k_gap_pct >= 0.01
-                            
-                            if k_bearish and k_sweep_ok and k_gap_ok:
-                                sl2 = (highest_wick + 0.00001) if touched_04 else (lvl_m04 + 0.00002)
-                                risk2 = sl2 - k_c
-                                sl2_pct = (risk2 / k_c) * 100.0
-                                if 0.035 <= sl2_pct <= 0.154:
-                                    tp2 = k_c - 3.75 * risk2
-                                    e2_close_ist = r_k['dt_ist'] + timedelta(minutes=15)
-                                    entry2 = dict(result)
-                                    entry2.update({
-                                        "direction": "short",
-                                        "entry_no": 2,
-                                        "is_double_entry": True,
-                                        "entry_price": round(k_c, 5),
-                                        "entry_time_ist": e2_close_ist.strftime("%Y-%m-%dT%H:%M"),
-                                        "sl_price": round(sl2, 5),
-                                        "tp_price": round(tp2, 5),
-                                        "sl_percentage": round(sl2_pct, 3),
-                                        "tp_percentage": round(sl2_pct * 3.75, 3),
-                                        "status": "Active Signal (London Short - Entry 2)",
-                                        "details": f"Level +0.2 swept ({lvl_m02:.5f}) confirmed rejection | Entry #2 (Double Entry) after Entry #1 SL Hit."
-                                    })
-                                    return [entry1, entry2]
-                        return entry1
     except Exception as e:
         result["status"] = "Error"
         result["details"] = str(e)
@@ -1631,6 +1452,7 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
         result_template["status"] = "Error"
         result_template["details"] = str(e)
         return result_template
+
 
 # ==============================================================================
 # 6. MAIN DASHBOARD VIEW (PREMIUM & ANDROID MOBILE-OPTIMIZED)
