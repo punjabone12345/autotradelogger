@@ -357,11 +357,12 @@ BASE44_API_URL = "https://trading-journal-2-0.base44.app/api/entities/Trade"
 FIXED_FEES = {
     "XAUUSD": 25.0,
     "GBPUSD": 40.0,
-    "USDJPY": 40.0
+    "USDJPY": 40.0,
+    "EURUSD": 0.0
 }
 
 def get_trade_fee(symbol: str) -> float:
-    """Returns fixed fee per trade ($25 for XAUUSD, $40 for GBPUSD, $40 for USDJPY)."""
+    """Returns fixed fee per trade ($25 for XAUUSD, $40 for GBPUSD, $40 for USDJPY, $0 for EURUSD)."""
     s = str(symbol).upper()
     if "XAU" in s:
         return FIXED_FEES["XAUUSD"]
@@ -369,6 +370,8 @@ def get_trade_fee(symbol: str) -> float:
         return FIXED_FEES["GBPUSD"]
     elif "JPY" in s:
         return FIXED_FEES["USDJPY"]
+    elif "EUR" in s:
+        return FIXED_FEES["EURUSD"]
     return 0.0
 
 def calculate_risk_quantity(symbol: str, entry_price: float, sl_price: float, risk_usd: float = DEFAULT_AMOUNT) -> float:
@@ -469,7 +472,8 @@ def evaluate_trade_lifecycle(trade_info: dict) -> dict:
     # Pre-existing entry time if provided by strategy engine (at candle close)
     entry_time_str = trade_info.get("entry_time_ist")
     
-    quantity = calculate_risk_quantity(symbol, entry_price, sl_price)
+    risk_allocation = trade_info.get("risk_allocation", DEFAULT_AMOUNT)
+    quantity = calculate_risk_quantity(symbol, entry_price, sl_price, risk_usd=risk_allocation)
     inst = "EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD"))
     candles_df = fetch_oanda_candles(inst, "M15", trade_date)
     
@@ -1651,6 +1655,8 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
         result["tp_price"] = round(tp, 5)
         result["sl_percentage"] = round(sl_pct, 3)
         result["tp_percentage"] = round(tp_pct, 3)
+        result["tier"] = tier
+        result["risk_allocation"] = risk_allocation
         result["status"] = f"Active Setup ({tier})"
         result["details"] = (
             f"EURUSD 30M {direction.upper()} validated at {entry_time_str} IST ({season_name}). "
@@ -1707,17 +1713,38 @@ if "open_check_done" not in st.session_state:
         if updated_trades:
             st.toast(f"🔄 Re-evaluated and updated {len(updated_trades)} open trade(s) in Base44!", icon="⚡")
 
-# Top Strategy Information Cards (Responsive on Mobile)
+# System Connectivity & Operational Status Strip
+oanda_status = "🟢 Connected" if st.session_state.oanda_token else "🔴 Token Needed"
+env_text = f"({st.session_state.oanda_env.title()})" if st.session_state.oanda_token else ""
+b44_status = "🟢 Armed (4 Strategies)" if st.session_state.base44_token else "🔴 Token Needed"
+
+st.markdown(f"""
+<div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; align-items: center;">
+    <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 999px; padding: 6px 14px; font-size: 0.82rem; color: #94a3b8; display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 0.9rem;">🌐</span>
+        <span>OANDA Broker Feed: <strong style="color: #f1f5f9;">{oanda_status} {env_text}</strong> &bull; M1, M15, M30, H2</span>
+    </div>
+    <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 999px; padding: 6px 14px; font-size: 0.82rem; color: #94a3b8; display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 0.9rem;">⚡</span>
+        <span>Base44 Auto-Journal: <strong style="color: #f1f5f9;">{b44_status}</strong></span>
+    </div>
+    <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 999px; padding: 6px 14px; font-size: 0.82rem; color: #94a3b8; display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 0.9rem;">🛡️</span>
+        <span>News Shield: <strong style="color: #f1f5f9;">Active</strong> (USD NFP/CPI/FOMC &bull; EUR ECB &bull; GBP BOE &bull; JPY BOJ)</span>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# Top 4 Institutional Strategy Cards (All 4 Models on Dashboard)
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 with kpi1:
-    st.metric("USDJPY Selfsweep", "1:5.0 RRR", "Fee: $40.00 • No Tue")
+    st.metric("🇯🇵 USDJPY Selfsweep", "1:5.00 RRR", "Fee: $40.00 • No Tue")
 with kpi2:
-    st.metric("GBPUSD Asia Fib", "1:3.75 RRR", "Fee: $40.00 • 1.2-1.4 Fib")
+    st.metric("🇬🇧 GBPUSD Asia Fib", "1:3.75 RRR", "Fee: $40.00 • 1.2-1.4 Fib")
 with kpi3:
-    st.metric("XAUUSD 2H DOL", "1:3.30 RRR", "Fee: $25.00 • No Thu")
+    st.metric("🪙 XAUUSD 2H DOL", "1:3.30 RRR", "Fee: $25.00 • No Thu")
 with kpi4:
-    oanda_status = "🟢 Connected" if st.session_state.oanda_token else "🔴 Token Needed"
-    st.metric("OANDA Live Feed", oanda_status, "M15 & M1 Streams")
+    st.metric("🇪🇺 EURUSD 30M Candle", "1:5.50 RRR", "Case 2 • Mon & Thu Only")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1931,7 +1958,7 @@ if run_clicked:
                     "Status": status_lifecycle,
                     "SL%": f"{trade['sl_percentage']}%",
                     "TP%": f"{trade['tp_percentage']}%",
-                    "Risk ($)": f"${DEFAULT_AMOUNT:,.2f}",
+                    "Risk ($)": f"${trade.get('risk_allocation', DEFAULT_AMOUNT):,.2f}",
                     "Base44 Sync": status_text,
                     "Details": msg,
                     "Feed": trade.get("data_source", "OANDA"),
@@ -1961,7 +1988,7 @@ if run_clicked:
                     "Status": "NO SETUP" if "Blocked" not in trade["status"] else "BLOCKED",
                     "SL%": "-",
                     "TP%": "-",
-                    "Risk ($)": f"${DEFAULT_AMOUNT:,.2f}",
+                    "Risk ($)": f"${trade.get('risk_allocation', DEFAULT_AMOUNT):,.2f}",
                     "Base44 Sync": "N/A (No Setup)" if "Blocked" not in trade["status"] else "Blocked (Pending Active)",
                     "Details": trade["status"] + (f" ({trade['details']})" if trade['details'] else ""),
                     "Feed": trade.get("data_source", "OANDA"),
@@ -2098,41 +2125,164 @@ if run_clicked:
 
 
     with tab_rules:
-        st.markdown("##### 📖 Complete Rules & Execution Specifications")
+        st.markdown("##### 📖 Complete Rules & Execution Specifications (All 4 Strategies)")
         
+        # Strategy 1: USDJPY
         st.markdown("""
-        <div class="trade-card" style="border-left: 4px solid #38bdf8;">
+        <div class="trade-card" style="border-left: 4px solid #f59e0b; margin-bottom: 16px;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                <span style="font-size: 1.2rem; font-weight: 800; color: #38bdf8;">🇪🇺 EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE</span>
+                <span style="font-size: 1.15rem; font-weight: 800; color: #f59e0b;">🇯🇵 1. USDJPY SELFSWEEP</span>
+                <span style="background: rgba(245, 158, 11, 0.2); padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 700; color: #f59e0b;">Strategy ID: 6acaf2a887cd7b6cb6a1267c</span>
+            </div>
+            <p style="color: #cbd5e1; font-size: 0.88rem; line-height: 1.6; margin-bottom: 0;">
+                <strong>Instrument:</strong> USD/JPY (OANDA: <code>USD_JPY</code>) &bull; <strong>Timeframe:</strong> 15-Minute (<code>M15</code>)<br>
+                <strong>Execution Days:</strong> <strong>Monday, Wednesday, Thursday, Friday</strong> (<strong>Tuesday strictly excluded</strong>).<br>
+                <strong>Setup Concept:</strong> Liquidity sweep of preceding session extremes with immediate candle rejection.<br>
+                <strong>Stop Loss (SL):</strong> Opposite swing extreme &bull; <strong>Filter:</strong> <strong>0.045% to 0.154%</strong> of price (~7.0 to 24.0 pips).<br>
+                <strong>Profit Target (TP):</strong> Strictly <strong>1:5.00 RR</strong> &bull; <strong>Breakeven (BE):</strong> <strong>NONE (No Breakeven)</strong>.<br>
+                <strong>Risk Sizing & Fees:</strong> $300 Fixed Risk Allocation &bull; Broker Fee: $40.00.<br>
+                <strong>News Shield:</strong> Auto-exit 5 min prior to <strong>US NFP, CPI, FOMC & BOJ Policy Decisions</strong>.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Strategy 2: GBPUSD
+        st.markdown("""
+        <div class="trade-card" style="border-left: 4px solid #10b981; margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 1.15rem; font-weight: 800; color: #10b981;">🇬🇧 2. GBPUSD ASIA 1.2 - 1.4 FIB RETRACEMENT (GodMode)</span>
+                <span style="background: rgba(16, 185, 129, 0.2); padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 700; color: #10b981;">Strategy ID: 6acaf29762d5f24891c0c9bc</span>
+            </div>
+            <p style="color: #cbd5e1; font-size: 0.88rem; line-height: 1.6; margin-bottom: 0;">
+                <strong>Instrument:</strong> GBP/USD (OANDA: <code>GBP_USD</code>) &bull; <strong>Timeframe:</strong> 15-Minute (<code>M15</code>)<br>
+                <strong>Execution Days:</strong> Monday through Friday &bull; <strong>Asian Range:</strong> 05:30&ndash;09:30 Summer / 06:30&ndash;10:30 Winter IST.<br>
+                <strong>Pre-London Gap Check:</strong> 09:45&ndash;11:15 Summer / 10:45&ndash;12:15 Winter IST &bull; <strong>London Window:</strong> 11:30&ndash;14:30 Summer / 12:30&ndash;15:30 Winter IST.<br>
+                <strong>Trigger:</strong> Limit/Market touch of the <strong>1.20 to 1.40 Fibonacci Extension</strong> of the Asian session range.<br>
+                <strong>Stop Loss (SL):</strong> Opposite extreme &bull; <strong>Filter:</strong> <strong>0.035% to 0.154%</strong> (~4.5 to 20.0 pips).<br>
+                <strong>Profit Target (TP):</strong> Strictly <strong>1:3.75 RR</strong> &bull; <strong>Breakeven (BE):</strong> <strong>NONE (No Breakeven)</strong>.<br>
+                <strong>Entry 2 Protocol:</strong> Double Entry armed if Entry 1 stops out without a candle closing beyond SL.<br>
+                <strong>Risk Sizing & Fees:</strong> $300 Fixed Risk Allocation &bull; Broker Fee: $40.00.<br>
+                <strong>News Shield:</strong> Auto-exit 5 min prior to <strong>US NFP, CPI, FOMC & BOE Policy Decisions</strong>.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Strategy 3: XAUUSD
+        st.markdown("""
+        <div class="trade-card" style="border-left: 4px solid #eab308; margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 1.15rem; font-weight: 800; color: #eab308;">🪙 3. XAUUSD 2H 4:30/5:30 DOL</span>
+                <span style="background: rgba(234, 179, 8, 0.2); padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 700; color: #eab308;">Strategy ID: 6acaf24d7a78a186a5430938</span>
+            </div>
+            <p style="color: #cbd5e1; font-size: 0.88rem; line-height: 1.6; margin-bottom: 0;">
+                <strong>Instrument:</strong> Gold (OANDA: <code>XAU_USD</code>) &bull; <strong>Timeframe:</strong> 2-Hour (<code>H2</code>)<br>
+                <strong>Execution Days:</strong> <strong>Monday, Tuesday, Wednesday, Friday</strong> (<strong>Thursday strictly excluded</strong>).<br>
+                <strong>Structure:</strong> 2-Hour morning reference candle at 18:00 NY / 06:30 IST &bull; Clean Breakout & Swept Breakout triggers.<br>
+                <strong>Stop Loss (SL):</strong> Opposite structural extreme &bull; <strong>Filter:</strong> <strong>0.165% to 0.994%</strong>.<br>
+                <strong>Profit Target (TP):</strong> <strong>1:3.30 RR</strong> &bull; <strong>Breakeven (BE):</strong> <strong>Armed at +2.50R</strong>.<br>
+                <strong>Risk Sizing & Fees:</strong> $300 Fixed Risk Allocation &bull; Broker Fee: $25.00.<br>
+                <strong>News Shield:</strong> Auto-exit 5 min prior to <strong>US NFP, CPI & FOMC Statement</strong>.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Strategy 4: EURUSD
+        st.markdown("""
+        <div class="trade-card" style="border-left: 4px solid #38bdf8; margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 1.15rem; font-weight: 800; color: #38bdf8;">🇪🇺 4. EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE</span>
                 <span style="background: rgba(56, 189, 248, 0.2); padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 700; color: #38bdf8;">Strategy ID: 6ad8f4b28c55371171816449</span>
             </div>
-            <p style="color: #cbd5e1; font-size: 0.9rem; line-height: 1.6;">
+            <p style="color: #cbd5e1; font-size: 0.88rem; line-height: 1.6; margin-bottom: 0;">
                 <strong>Instrument:</strong> EUR/USD (OANDA: <code>EUR_USD</code>) &bull; <strong>Timeframe:</strong> 30-Minute (<code>M30</code>)<br>
                 <strong>Execution Days:</strong> <strong>Monday & Thursday ONLY</strong> (Tuesdays, Wednesdays & Fridays are strictly excluded to avoid mid-week chop).<br>
                 <strong>Entry Timing:</strong><br>
                 &bull; <strong>Summer (US EDT / DST):</strong> 11:00 AM &ndash; 11:30 AM IST (Entry at <strong>11:30 AM IST candle close</strong>).<br>
                 &bull; <strong>Winter (US EST / Standard):</strong> 12:00 PM &ndash; 12:30 PM IST (Entry at <strong>12:30 PM IST candle close</strong>).<br>
-                <strong>Directional Signal:</strong><br>
-                &bull; 30M Close &gt; Open &rarr; <span style="color: #34d399; font-weight: 700;">LONG (BUY)</span><br>
-                &bull; 30M Close &lt; Open &rarr; <span style="color: #f87171; font-weight: 700;">SHORT (SELL)</span><br>
-                &bull; 30M Close == Open &rarr; Doji (No trade).<br>
+                <strong>Directional Signal:</strong> Close &gt; Open &rarr; <span style="color: #34d399; font-weight: 700;">LONG</span> | Close &lt; Open &rarr; <span style="color: #f87171; font-weight: 700;">SHORT</span> | Close == Open &rarr; Doji (Skip).<br>
                 <strong>Stop Loss (SL):</strong> Opposite extreme of the 30M signal candle (Low for Long, High for Short).<br>
-                <strong>SL Range Filter:</strong> <strong>0.035% to 0.065%</strong> of price (~3.8 to 7.2 pips). Candles with risk &lt; 0.035% or &gt; 0.065% are strictly skipped.<br>
-                <strong>Profit Target (TP):</strong> Strictly <strong>1:5.50 RR</strong> ($5.50 \times \text{Risk}$).<br>
-                <strong>Breakeven (BE) Protocol:</strong> <strong>NONE (No Breakeven)</strong> &mdash; Set & Forget. Position must run strictly to Target (+5.50R) or Stop Loss (-1.00R).<br>
+                <strong>SL Range Filter:</strong> <strong>0.035% to 0.065%</strong> of price (~3.8 to 7.2 pips). Candles outside this range are strictly skipped.<br>
+                <strong>Profit Target (TP):</strong> Strictly <strong>1:5.50 RR</strong> ($5.50 \times \text{Risk}$) &bull; <strong>Breakeven (BE):</strong> <strong>NONE (No Breakeven)</strong>.<br>
                 <strong>Quality Tiering (Case 2 Allocation):</strong><br>
-                &bull; <strong>Tier A++ ($350 Allocation):</strong> Preceding 30M candle (10:30 Summer / 11:30 Winter) matches signal candle color (Same-Color Continuation).<br>
-                &bull; <strong>Tier Normal ($250 Allocation):</strong> Preceding 30M candle has opposite color (Reversal / Momentum Shift).<br>
-                <strong>Prohibited News Protocols (News Shield):</strong><br>
-                &bull; <strong>EUR-Specific Restricted News:</strong> <strong>ECB Monetary Policy Statement & Rate Decision</strong>.<br>
-                &bull; <strong>USD Restricted News:</strong> <strong>US NFP, CPI, and FOMC Statement</strong>.<br>
-                &bull; <em>Action:</em> Position is closed flat 5 minutes prior to any scheduled prohibited release.<br>
-                <strong>Weekend Holding Rule:</strong> Mandatory flat before Saturday 02:30 AM (Summer) / 03:30 AM (Winter) IST. No weekend exposure.
+                &bull; <strong>Tier A++ ($350 Allocation):</strong> Preceding 30M candle matches signal candle color (Continuation).<br>
+                &bull; <strong>Tier Normal ($250 Allocation):</strong> Preceding 30M candle has opposite color (Reversal).<br>
+                <strong>Restricted News:</strong> <strong>US NFP, CPI, FOMC & ECB Monetary Policy Statement</strong> (Exit 5 min prior).<br>
+                <strong>Weekend Rule:</strong> Flat before Saturday 02:30 AM Summer / 03:30 AM Winter IST.
             </p>
         </div>
         """, unsafe_allow_html=True)
 
 else:
+    # --------------------------------------------------------------------------
+    # DASHBOARD LANDING VIEW (ACTIVE 4-STRATEGY PORTFOLIO BLUEPRINT)
+    # --------------------------------------------------------------------------
     st.info("💡 Choose a **Single Day** or a **Date Range** above, then click **'🚀 Run Strategies'** to stream live OANDA candles and audit trade triggers.")
-
-
+    
+    st.markdown("""
+    <div class="glass-card" style="margin-top: 14px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; flex-wrap: wrap; gap: 8px;">
+            <span style="font-size: 1.15rem; font-weight: 800; color: #f8fafc;">🏛️ Institutional Portfolio Blueprint & Active Strategies</span>
+            <span style="background: rgba(37, 99, 235, 0.2); color: #60a5fa; font-weight: 700; padding: 4px 12px; border-radius: 999px; font-size: 0.8rem; border: 1px solid rgba(96, 165, 250, 0.3);">
+                ⚡ All 4 Strategies Connected to Base44 Journal
+            </span>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px;">
+            <!-- Strategy 1 Card -->
+            <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(245, 158, 11, 0.3); border-radius: 12px; padding: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="font-weight: 800; color: #f59e0b; font-size: 1.0rem;">🇯🇵 USDJPY Selfsweep</span>
+                    <span style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 8px;">1:5.00 RR</span>
+                </div>
+                <div style="color: #94a3b8; font-size: 0.82rem; line-height: 1.5;">
+                    &bull; <strong>Timeframe:</strong> M15 &bull; <strong>Fee:</strong> $40.00<br>
+                    &bull; <strong>Days:</strong> Mon, Wed, Thu, Fri (No Tue)<br>
+                    &bull; <strong>SL Filter:</strong> 0.045% &ndash; 0.154% (No BE)<br>
+                    &bull; <strong>News Shield:</strong> US News & BOJ Policy<br>
+                    &bull; <code style="font-size: 0.75rem; color: #cbd5e1;">ID: 6acaf2a887cd7b6cb6a1267c</code>
+                </div>
+            </div>
+            <!-- Strategy 2 Card -->
+            <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 12px; padding: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="font-weight: 800; color: #10b981; font-size: 1.0rem;">🇬🇧 GBPUSD Asia Fib</span>
+                    <span style="background: rgba(16, 185, 129, 0.2); color: #34d399; font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 8px;">1:3.75 RR</span>
+                </div>
+                <div style="color: #94a3b8; font-size: 0.82rem; line-height: 1.5;">
+                    &bull; <strong>Timeframe:</strong> M15 &bull; <strong>Fee:</strong> $40.00<br>
+                    &bull; <strong>Days:</strong> Monday &ndash; Friday<br>
+                    &bull; <strong>Trigger:</strong> 1.20&ndash;1.40 Fib Extension (No BE)<br>
+                    &bull; <strong>News Shield:</strong> US News & BOE Policy<br>
+                    &bull; <code style="font-size: 0.75rem; color: #cbd5e1;">ID: 6acaf29762d5f24891c0c9bc</code>
+                </div>
+            </div>
+            <!-- Strategy 3 Card -->
+            <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(234, 179, 8, 0.3); border-radius: 12px; padding: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="font-weight: 800; color: #eab308; font-size: 1.0rem;">🪙 XAUUSD 2H DOL</span>
+                    <span style="background: rgba(234, 179, 8, 0.2); color: #fde047; font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 8px;">1:3.30 RR</span>
+                </div>
+                <div style="color: #94a3b8; font-size: 0.82rem; line-height: 1.5;">
+                    &bull; <strong>Timeframe:</strong> H2 &bull; <strong>Fee:</strong> $25.00<br>
+                    &bull; <strong>Days:</strong> Mon, Tue, Wed, Fri (No Thu)<br>
+                    &bull; <strong>Breakout:</strong> Swept & Clean (BE @ +2.5R)<br>
+                    &bull; <strong>News Shield:</strong> US NFP, CPI & FOMC<br>
+                    &bull; <code style="font-size: 0.75rem; color: #cbd5e1;">ID: 6acaf24d7a78a186a5430938</code>
+                </div>
+            </div>
+            <!-- Strategy 4 Card -->
+            <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 12px; padding: 14px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <span style="font-weight: 800; color: #38bdf8; font-size: 1.0rem;">🇪🇺 EURUSD 30M Candle</span>
+                    <span style="background: rgba(56, 189, 248, 0.2); color: #7dd3fc; font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 8px;">1:5.50 RR</span>
+                </div>
+                <div style="color: #94a3b8; font-size: 0.82rem; line-height: 1.5;">
+                    &bull; <strong>Timeframe:</strong> M30 &bull; <strong>Fee:</strong> $0.00 (Flat)<br>
+                    &bull; <strong>Days:</strong> Mon & Thu ONLY (11:00/12:00 IST)<br>
+                    &bull; <strong>SL Filter:</strong> 0.035% &ndash; 0.065% (No BE)<br>
+                    &bull; <strong>News Shield:</strong> US News & ECB Monetary Policy<br>
+                    &bull; <code style="font-size: 0.75rem; color: #cbd5e1;">ID: 6ad8f4b28c55371171816449</code>
+                </div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
