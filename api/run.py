@@ -18,6 +18,7 @@ BASE44_API_URL = "https://trading-journal-2-0.base44.app/api/entities/Trade"
 STRAT1_ID = os.environ.get("STRAT1_ID", "6acaf2a887cd7b6cb6a1267c")  # USDJPY SELFSWEEP
 STRAT2_ID = os.environ.get("STRAT2_ID", "6acaf29762d5f24891c0c9bc")  # GBPUSD ASIA 1.2 - 1.4 FIB RETRACMENT
 STRAT3_ID = os.environ.get("STRAT3_ID", "6acaf24d7a78a186a5430938")  # XAUUSD 2H 4:30/5:30 DOL
+STRAT4_ID = os.environ.get("STRAT4_ID", "6ad8f4b28c55371171816449")  # EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE
 
 OANDA_TOKEN = os.environ.get("OANDA_TOKEN", "f2b74d1cee1eb5488ba8b6b067e3ffc6-b6ccbdca86ea9ddb162f03996341ae91")
 
@@ -28,7 +29,8 @@ OANDA_TOKEN = os.environ.get("OANDA_TOKEN", "f2b74d1cee1eb5488ba8b6b067e3ffc6-b6
 FIXED_FEES = {
     "XAUUSD": 25.0,
     "GBPUSD": 40.0,
-    "USDJPY": 40.0
+    "USDJPY": 40.0,
+    "EURUSD": 30.0
 }
 
 # ==============================================================================
@@ -121,7 +123,7 @@ def fetch_oanda_candles(instrument: str, granularity: str, target_date: datetime
 
 def get_latest_market_price(symbol: str) -> float:
     """Fetches real-time market price for symbol from OANDA."""
-    inst = "USD_JPY" if "JPY" in symbol else ("GBP_USD" if "GBP" in symbol else "XAU_USD")
+    inst = "EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD"))
     if not OANDA_TOKEN:
         return 0.0
     for base_url in ["https://api-fxpractice.oanda.com/v3", "https://api-fxtrade.oanda.com/v3"]:
@@ -223,6 +225,8 @@ def get_trade_fee(symbol: str, user_fee: Optional[float] = None) -> float:
         return FIXED_FEES["GBPUSD"]
     elif "JPY" in s:
         return FIXED_FEES["USDJPY"]
+    elif "EUR" in s:
+        return FIXED_FEES["EURUSD"]
     return float(user_fee or 40.0)
 
 # ==============================================================================
@@ -373,6 +377,8 @@ def get_event_symbols(category: str, title: str = "") -> list:
         return ["USDJPY"]
     elif "BOE" in c or "BOE" in t or "BANK OF ENGLAND" in t or "UK" in c or "UK" in t or "GBP" in t:
         return ["GBPUSD"]
+    elif "ECB" in c or "ECB" in t or "EUROPEAN CENTRAL BANK" in t or "ECB_RATE" in c or ("MONETARY POLICY" in t and ("EUR" in t or "ECB" in t or "EURO" in t)):
+        return ["EURUSD"]
     elif c in ["NFP", "CPI", "FOMC"]:
         return ["USDJPY", "GBPUSD", "XAUUSD", "EURUSD"]
     return ["USDJPY", "GBPUSD", "XAUUSD", "EURUSD"]
@@ -438,9 +444,10 @@ def get_news_events_for_window(start_date: datetime.date, end_date: datetime.dat
                     is_boj = "bank of japan" in name or "boj" in name or "bank of japan" in title
                     is_boe = "bank of england" in name or "boe" in name or "official bank rate" in name or "monetary policy" in name
                     is_uk_cpi = ("cpi" in name or "cpi" in title) and ("uk" in name or "united kingdom" in name or "britain" in name)
+                    is_ecb = ("european central bank" in name or "ecb" in name or "main refinancing" in name or "monetary policy" in name) and ("eur" in name or "euro" in name or "eu" in name or "ecb" in name or "ecb" in title)
 
-                    if is_nfp or is_cpi or is_fomc or is_boj or is_boe or is_uk_cpi:
-                        cat = "NFP" if is_nfp else ("CPI" if is_cpi else ("FOMC" if is_fomc else ("BOJ_RATE" if is_boj else ("BOE_RATE" if is_boe else "UK_CPI"))))
+                    if is_nfp or is_cpi or is_fomc or is_boj or is_boe or is_uk_cpi or is_ecb:
+                        cat = "NFP" if is_nfp else ("CPI" if is_cpi else ("FOMC" if is_fomc else ("BOJ_RATE" if is_boj else ("BOE_RATE" if is_boe else ("ECB_RATE" if is_ecb else "UK_CPI")))))
                         time_utc_str = ev.get("time_utc")
                         if time_utc_str:
                             ev_utc = dt.fromisoformat(time_utc_str)
@@ -487,9 +494,10 @@ def get_news_events_for_window(start_date: datetime.date, end_date: datetime.dat
                         is_boj = (country == "JPY" and ("policy rate" in title or "monetary policy" in title or "boj" in title))
                         is_boe = (country == "GBP" and ("rate" in title or "monetary policy" in title or "bank of england" in title or "gdp" in title))
                         is_uk_cpi = (country == "GBP" and "cpi" in title)
+                        is_ecb = (country in ["EUR", "EU"] and ("monetary policy" in title or "rate" in title or "ecb" in title or "interest rate" in title or "deposit facility" in title))
 
-                        if is_nfp or is_cpi or is_fomc or is_boj or is_boe or is_uk_cpi:
-                            cat = "NFP" if is_nfp else ("CPI" if is_cpi else ("FOMC" if is_fomc else ("BOJ_RATE" if is_boj else ("BOE_RATE" if is_boe else "UK_CPI"))))
+                        if is_nfp or is_cpi or is_fomc or is_boj or is_boe or is_uk_cpi or is_ecb:
+                            cat = "NFP" if is_nfp else ("CPI" if is_cpi else ("FOMC" if is_fomc else ("BOJ_RATE" if is_boj else ("BOE_RATE" if is_boe else ("ECB_RATE" if is_ecb else "UK_CPI")))))
                             dt_str = ev.get("date")
                             ev_dt = dt.fromisoformat(dt_str)
                             ev_ist = ev_dt.astimezone(timezone(timedelta(hours=5, minutes=30))).replace(tzinfo=None)
@@ -546,7 +554,7 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
         
     entry_time_str = trade_info.get("entry_time_ist")
     quantity = calculate_risk_quantity(symbol, entry_price, sl_price, risk_usd=risk_usd)
-    inst = "USD_JPY" if "JPY" in symbol else ("GBP_USD" if "GBP" in symbol else "XAU_USD")
+    inst = "EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD"))
     candles_df = fetch_oanda_candles(inst, "M15", trade_date, end_date=trade_date + timedelta(days=2))
     
     status = "open"
@@ -1826,6 +1834,210 @@ def check_and_update_all_open_trades(api_key: str, default_risk: float = 300.0) 
         print(f"Error checking open trades: {e}")
         return []
 
+
+# ==============================================================================
+# STRATEGY 4: EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE
+# ==============================================================================
+def run_eurusd_strategy(target_date: datetime.date) -> dict:
+    """
+    EURUSD 30-Minute Frankfurt Impulse Strategy:
+    - Timeframe: 30-Minute (M30)
+    - Execution Days: Monday (0) & Thursday (3) ONLY. (Tue, Wed, Fri strictly skipped)
+    - Signal Candle: 11:00 AM - 11:30 AM IST (US EDT Summer) / 12:00 PM - 12:30 PM IST (US EST Winter)
+    - Entry: Exactly at candle close (11:30 AM IST Summer / 12:30 PM IST Winter)
+    - Direction:
+        * 30M Close > Open -> LONG (BUY)
+        * 30M Close < Open -> SHORT (SELL)
+        * 30M Close == Open -> Doji / No Trade
+    - Stop Loss: Opposite extreme of the 30M signal candle (Low for Long, High for Short)
+    - Stop Loss Range Filter: 0.035% to 0.065% of price (~3.8 to 7.2 pips). Outside range -> Skipped
+    - Target (Take Profit): Strictly 1:5.50 RR (5.50 * Risk)
+    - Breakeven Rule: NONE (No Breakeven / Hold strictly to Target or Stop Loss)
+    - Setup Quality Tiers (Case 2 Dynamic Allocation):
+        * A++ Setup (Preceding 30M candle is same color continuation): $350 risk
+        * Normal Setup (Preceding 30M candle is opposite color reversal): $250 risk
+    - Safety Protocols:
+        * High-impact news exit: NFP, CPI, FOMC, and ECB Monetary Policy releases.
+        * Weekend exit: Flat before Saturday 02:30 AM (Summer) / 03:30 AM (Winter) IST.
+    """
+    result = {
+        "strategy_name": "EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE",
+        "strategy_id": STRAT4_ID,
+        "symbol": "EURUSD",
+        "date": target_date.strftime("%Y-%m-%d"),
+        "direction": "none",
+        "entry_price": 0.0,
+        "entry_time_ist": None,
+        "sl_price": 0.0,
+        "tp_price": 0.0,
+        "sl_percentage": 0.0,
+        "tp_percentage": 0.0,
+        "status": "No Trade Setup",
+        "details": "",
+        "data_source": "OANDA Live API"
+    }
+    
+    # Day Filter: Monday (0) and Thursday (3) ONLY
+    weekday = target_date.weekday()
+    if weekday not in [0, 3]:
+        day_name = target_date.strftime('%A')
+        result["status"] = f"Skipped ({day_name} Rule)"
+        result["details"] = f"{day_name} is strictly excluded by EURUSD Frankfurt Impulse rules (Executes Monday & Thursday only)."
+        return result
+        
+    day_df = pd.DataFrame()
+    live_df = fetch_oanda_candles("EUR_USD", "M15", target_date)
+    if not live_df.empty:
+        day_df = live_df.copy()
+        result["data_source"] = "OANDA Live Feed"
+        
+    if day_df.empty:
+        # Check M15 archive first (instant load)
+        if os.path.exists("EURUSD_M15_2021_2026_Full.csv"):
+            df = pd.read_csv("EURUSD_M15_2021_2026_Full.csv")
+            df['dt_utc'] = pd.to_datetime(df['time'])
+            df['dt_ist'] = df['dt_utc'] + pd.Timedelta(hours=5, minutes=30)
+            df['time_utc'] = df['dt_utc']
+            match_df = df[df['dt_ist'].dt.date == target_date].sort_values('dt_ist').reset_index(drop=True)
+            if not match_df.empty:
+                day_df = match_df
+                result["data_source"] = "Local Archive (EURUSD_M15_2021_2026_Full.csv)"
+        elif os.path.exists("EURUSD_1M_Sep2024_Sep2026.csv"):
+            df = pd.read_csv("EURUSD_1M_Sep2024_Sep2026.csv")
+            df['dt_ist'] = pd.to_datetime(df['time_ist'].str.slice(0, 19))
+            df['dt_utc'] = pd.to_datetime(df['time_utc'].str.slice(0, 19))
+            df['time_utc'] = df['dt_utc']
+            match_df = df[df['dt_ist'].dt.date == target_date].sort_values('dt_ist').reset_index(drop=True)
+            if not match_df.empty:
+                day_df = match_df
+                result["data_source"] = "Local Archive (EURUSD_1M_Sep2024_Sep2026.csv)"
+                    
+    if day_df.empty or len(day_df) < 4:
+        result["status"] = "No Session Data"
+        result["details"] = f"Insufficient M15 candle data available for EURUSD on {target_date}."
+        return result
+        
+    try:
+        sample_utc = pd.to_datetime(day_df['time_utc'].iloc[0])
+        is_summer = is_us_dst(sample_utc)
+        
+        day_df['time_str_ist'] = day_df['dt_ist'].dt.strftime('%H:%M')
+        
+        # Determine signal and preceding candle times
+        if is_summer:
+            c1_str = "11:00"
+            c2_str = "11:15"
+            entry_time_str = "11:30"
+            p1_str = "10:30"
+            p2_str = "10:45"
+            season_name = "Summer (US EDT)"
+        else:
+            c1_str = "12:00"
+            c2_str = "12:15"
+            entry_time_str = "12:30"
+            p1_str = "11:30"
+            p2_str = "11:45"
+            season_name = "Winter (US EST)"
+            
+        b1 = day_df[day_df['time_str_ist'] == c1_str]
+        b2 = day_df[day_df['time_str_ist'] == c2_str]
+        b_entry = day_df[day_df['time_str_ist'] == entry_time_str]
+        
+        if b1.empty or b2.empty or b_entry.empty:
+            now_ist = dt.now(timezone(timedelta(hours=5, minutes=30))).replace(tzinfo=None)
+            if target_date == now_ist.date():
+                target_entry_dt = dt.strptime(f"{target_date} {entry_time_str}", "%Y-%m-%d %H:%M")
+                if now_ist < target_entry_dt:
+                    result["status"] = "Pending (Candle Forming)"
+                    result["details"] = f"EURUSD 30M signal candle ({c1_str}-{entry_time_str} IST) is currently forming. Entry scheduled at {entry_time_str} IST close."
+                    return result
+            result["status"] = "No Signal Candle"
+            result["details"] = f"Required 30M signal bars ({c1_str}, {c2_str}, {entry_time_str} IST) were not found in session data."
+            return result
+            
+        c_open = b1['open'].iloc[0]
+        c_high = max(b1['high'].iloc[0], b2['high'].iloc[0])
+        c_low = min(b1['low'].iloc[0], b2['low'].iloc[0])
+        c_close = b2['close'].iloc[-1]
+        entry_price = b_entry['open'].iloc[0]
+        
+        # Direction check
+        if c_close > c_open:
+            direction = "long"
+            sl = c_low
+            risk = entry_price - sl
+        elif c_close < c_open:
+            direction = "short"
+            sl = c_high
+            risk = sl - entry_price
+        else:
+            result["status"] = "No Trade (Doji)"
+            result["details"] = f"EURUSD 30M candle closed as Doji (Open={c_open:.5f}, Close={c_close:.5f}). No directional impulse."
+            return result
+            
+        if risk <= 0:
+            result["status"] = "Invalid Risk"
+            result["details"] = "Calculated risk is zero or negative."
+            return result
+            
+        sl_pct = (risk / entry_price) * 100.0
+        risk_pips = risk * 10000.0
+        
+        # Stop Loss Range Filter: 0.035% to 0.065%
+        if sl_pct < 0.035:
+            result["status"] = "Skipped (SL Below 0.035%)"
+            result["details"] = f"Signal candle risk is {sl_pct:.3f}% ({risk_pips:.1f} pips), below the 0.035% minimum threshold. Skipped to prevent market noise."
+            return result
+            
+        if sl_pct > 0.065:
+            result["status"] = "Skipped (SL Above 0.065%)"
+            result["details"] = f"Signal candle risk is {sl_pct:.3f}% ({risk_pips:.1f} pips), exceeding the 0.065% maximum threshold. Skipped to prevent over-extended risk."
+            return result
+            
+        # Target: Exactly 1:5.50 RR
+        rr = 5.50
+        if direction == "long":
+            tp = entry_price + rr * risk
+        else:
+            tp = entry_price - rr * risk
+            
+        tp_pct = (abs(tp - entry_price) / entry_price) * 100.0
+        
+        # Preceding 30M Candle Quality Tiering (Case 2 Model)
+        p1 = day_df[day_df['time_str_ist'] == p1_str]
+        p2 = day_df[day_df['time_str_ist'] == p2_str]
+        is_same_color = False
+        if not p1.empty and not p2.empty:
+            p_open = p1['open'].iloc[0]
+            p_close = p2['close'].iloc[-1]
+            prev_dir = "long" if p_close > p_open else ("short" if p_close < p_open else "doji")
+            is_same_color = (prev_dir == direction)
+            
+        tier = "A++ (Same-Color Continuation)" if is_same_color else "Normal (Reversal Setup)"
+        risk_allocation = 350.0 if is_same_color else 250.0
+        
+        result["direction"] = direction
+        result["entry_price"] = round(entry_price, 5)
+        result["entry_time_ist"] = f"{target_date.strftime('%Y-%m-%d')}T{entry_time_str}"
+        result["sl_price"] = round(sl, 5)
+        result["tp_price"] = round(tp, 5)
+        result["sl_percentage"] = round(sl_pct, 3)
+        result["tp_percentage"] = round(tp_pct, 3)
+        result["status"] = f"Active Setup ({tier})"
+        result["details"] = (
+            f"EURUSD 30M {direction.upper()} validated at {entry_time_str} IST ({season_name}). "
+            f"Entry: {entry_price:.5f}, SL: {sl:.5f} ({risk_pips:.1f} pips / {sl_pct:.3f}%), "
+            f"TP: {tp:.5f} (1:5.50 RR / +{risk_pips * 5.5:.1f} pips). "
+            f"Tier: {tier} (${risk_allocation:.0f} allocation). "
+            f"Protocol: Set & Forget (No BE). News Shield Active (NFP/CPI/FOMC & ECB Monetary Policy)."
+        )
+        return result
+        
+    except Exception as e:
+        result["status"] = "Error"
+        result["details"] = f"EURUSD execution engine error: {str(e)}"
+        return result
+
 # ==============================================================================
 # FASTAPI ENDPOINTS (VERCEL READY)
 # ==============================================================================
@@ -1842,7 +2054,8 @@ async def health_check():
         "strategies": [
             {"name": "USDJPY SELFSWEEP", "id": STRAT1_ID},
             {"name": "GBPUSD ASIA 1.2 - 1.4 FIB RETRACMENT", "id": STRAT2_ID},
-            {"name": "XAUUSD 2H 4:30/5:30 DOL", "id": STRAT3_ID}
+            {"name": "XAUUSD 2H 4:30/5:30 DOL", "id": STRAT3_ID},
+            {"name": "EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE", "id": STRAT4_ID}
         ],
         "message": "Send POST /api/run with {'date': 'YYYY-MM-DD', 'amount': 300.0, 'fees': 40.0} to execute strategies."
     }
@@ -1903,12 +2116,14 @@ async def run_daily_strategies(payload: RunRequest):
         res_usdjpy = run_usdjpy_strategy(target_date)
         res_gbpusd = run_gbpusd_strategy(target_date)
         res_xauusd = run_xauusd_strategy(target_date)
+        res_eurusd = run_eurusd_strategy(target_date)
 
         day_trades = []
         for strat_out, strat_id in [
             (res_usdjpy, STRAT1_ID),
             (res_gbpusd, STRAT2_ID),
-            (res_xauusd, STRAT3_ID)
+            (res_xauusd, STRAT3_ID),
+            (res_eurusd, STRAT4_ID)
         ]:
             if isinstance(strat_out, list):
                 for sub_item in strat_out:

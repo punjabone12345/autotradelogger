@@ -187,6 +187,9 @@ if "strat_2_id" not in st.session_state:
 if "strat_3_id" not in st.session_state:
     st.session_state.strat_3_id = "6acaf24d7a78a186a5430938"  # XAUUSD 2H 4:30/5:30 DOL
 
+if "strat_4_id" not in st.session_state:
+    st.session_state.strat_4_id = "6ad8f4b28c55371171816449"  # EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE
+
 if "date_mode" not in st.session_state:
     st.session_state.date_mode = "Single Day"
 
@@ -243,6 +246,10 @@ with st.sidebar:
     st.session_state.strat_3_id = st.text_input(
         "XAUUSD 2H DOL ID",
         value=st.session_state.strat_3_id
+    )
+    st.session_state.strat_4_id = st.text_input(
+        "EURUSD 30M 11:00/12:00 CANDLE ID",
+        value=st.session_state.strat_4_id
     )
     
     st.divider()
@@ -322,7 +329,7 @@ def fetch_oanda_candles(instrument: str, granularity: str, target_date: datetime
 
 def get_latest_market_price(symbol: str) -> float:
     """Fetches real-time market price for symbol from OANDA."""
-    inst = "USD_JPY" if "JPY" in symbol else ("GBP_USD" if "GBP" in symbol else "XAU_USD")
+    inst = "EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD"))
     token = st.session_state.oanda_token if "oanda_token" in st.session_state else os.environ.get("OANDA_TOKEN", "")
     if not token:
         return 0.0
@@ -463,7 +470,7 @@ def evaluate_trade_lifecycle(trade_info: dict) -> dict:
     entry_time_str = trade_info.get("entry_time_ist")
     
     quantity = calculate_risk_quantity(symbol, entry_price, sl_price)
-    inst = "USD_JPY" if "JPY" in symbol else ("GBP_USD" if "GBP" in symbol else "XAU_USD")
+    inst = "EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD"))
     candles_df = fetch_oanda_candles(inst, "M15", trade_date)
     
     status = "open"
@@ -487,6 +494,8 @@ def evaluate_trade_lifecycle(trade_info: dict) -> dict:
                 entry_time_str = f"{trade_date.strftime('%Y-%m-%d')}T06:30"
             elif symbol == "USDJPY":
                 entry_time_str = f"{trade_date.strftime('%Y-%m-%d')}T13:30"
+            elif symbol == "EURUSD":
+                entry_time_str = f"{trade_date.strftime('%Y-%m-%d')}T11:30"
             else:
                 entry_time_str = f"{trade_date.strftime('%Y-%m-%d')}T12:00"
 
@@ -1454,6 +1463,210 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
         return result_template
 
 
+
+# ------------------------------------------------------------------------------
+# Strategy 4: EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE
+# ------------------------------------------------------------------------------
+def run_eurusd_strategy(target_date: datetime.date) -> dict:
+    """
+    EURUSD 30-Minute Frankfurt Impulse Strategy:
+    - Timeframe: 30-Minute (M30)
+    - Execution Days: Monday (0) & Thursday (3) ONLY. (Tue, Wed, Fri strictly skipped)
+    - Signal Candle: 11:00 AM - 11:30 AM IST (US EDT Summer) / 12:00 PM - 12:30 PM IST (US EST Winter)
+    - Entry: Exactly at candle close (11:30 AM IST Summer / 12:30 PM IST Winter)
+    - Direction:
+        * 30M Close > Open -> LONG (BUY)
+        * 30M Close < Open -> SHORT (SELL)
+        * 30M Close == Open -> Doji / No Trade
+    - Stop Loss: Opposite extreme of the 30M signal candle (Low for Long, High for Short)
+    - Stop Loss Range Filter: 0.035% to 0.065% of price (~3.8 to 7.2 pips). Outside range -> Skipped
+    - Target (Take Profit): Strictly 1:5.50 RR (5.50 * Risk)
+    - Breakeven Rule: NONE (No Breakeven / Hold strictly to Target or Stop Loss)
+    - Setup Quality Tiers (Case 2 Dynamic Allocation):
+        * A++ Setup (Preceding 30M candle is same color continuation): $350 risk
+        * Normal Setup (Preceding 30M candle is opposite color reversal): $250 risk
+    - Safety Protocols:
+        * High-impact news exit: NFP, CPI, FOMC, and ECB Monetary Policy releases.
+        * Weekend exit: Flat before Saturday 02:30 AM (Summer) / 03:30 AM (Winter) IST.
+    """
+    result = {
+        "strategy_name": "EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE",
+        "symbol": "EURUSD",
+        "date": target_date,
+        "direction": "none",
+        "entry_price": 0.0,
+        "entry_time_ist": None,
+        "sl_price": 0.0,
+        "tp_price": 0.0,
+        "sl_percentage": 0.0,
+        "tp_percentage": 0.0,
+        "status": "No Trade Setup",
+        "details": "",
+        "data_source": "OANDA Live API"
+    }
+    
+    # Day Filter: Monday (0) and Thursday (3) ONLY
+    weekday = target_date.weekday()
+    if weekday not in [0, 3]:
+        day_name = target_date.strftime('%A')
+        result["status"] = f"Skipped ({day_name} Rule)"
+        result["details"] = f"{day_name} is strictly excluded by EURUSD Frankfurt Impulse rules (Executes Monday & Thursday only)."
+        return result
+        
+    day_df = pd.DataFrame()
+    live_df = fetch_oanda_candles("EUR_USD", "M15", target_date)
+    if not live_df.empty:
+        day_df = live_df.copy()
+        result["data_source"] = "OANDA Live Feed"
+        
+    if day_df.empty:
+        # Check M15 archive first (instant load)
+        if os.path.exists("EURUSD_M15_2021_2026_Full.csv"):
+            df = pd.read_csv("EURUSD_M15_2021_2026_Full.csv")
+            df['dt_utc'] = pd.to_datetime(df['time'])
+            df['dt_ist'] = df['dt_utc'] + pd.Timedelta(hours=5, minutes=30)
+            df['time_utc'] = df['dt_utc']
+            match_df = df[df['dt_ist'].dt.date == target_date].sort_values('dt_ist').reset_index(drop=True)
+            if not match_df.empty:
+                day_df = match_df
+                result["data_source"] = "Local Archive (EURUSD_M15_2021_2026_Full.csv)"
+        elif os.path.exists("EURUSD_1M_Sep2024_Sep2026.csv"):
+            df = pd.read_csv("EURUSD_1M_Sep2024_Sep2026.csv")
+            df['dt_ist'] = pd.to_datetime(df['time_ist'].str.slice(0, 19))
+            df['dt_utc'] = pd.to_datetime(df['time_utc'].str.slice(0, 19))
+            df['time_utc'] = df['dt_utc']
+            match_df = df[df['dt_ist'].dt.date == target_date].sort_values('dt_ist').reset_index(drop=True)
+            if not match_df.empty:
+                day_df = match_df
+                result["data_source"] = "Local Archive (EURUSD_1M_Sep2024_Sep2026.csv)"
+                    
+    if day_df.empty or len(day_df) < 4:
+        result["status"] = "No Session Data"
+        result["details"] = f"Insufficient M15 candle data available for EURUSD on {target_date}."
+        return result
+        
+    try:
+        sample_utc = pd.to_datetime(day_df['time_utc'].iloc[0])
+        is_summer = is_us_dst(sample_utc)
+        
+        day_df['time_str_ist'] = day_df['dt_ist'].dt.strftime('%H:%M')
+        
+        # Determine signal and preceding candle times
+        if is_summer:
+            c1_str = "11:00"
+            c2_str = "11:15"
+            entry_time_str = "11:30"
+            p1_str = "10:30"
+            p2_str = "10:45"
+            season_name = "Summer (US EDT)"
+        else:
+            c1_str = "12:00"
+            c2_str = "12:15"
+            entry_time_str = "12:30"
+            p1_str = "11:30"
+            p2_str = "11:45"
+            season_name = "Winter (US EST)"
+            
+        b1 = day_df[day_df['time_str_ist'] == c1_str]
+        b2 = day_df[day_df['time_str_ist'] == c2_str]
+        b_entry = day_df[day_df['time_str_ist'] == entry_time_str]
+        
+        if b1.empty or b2.empty or b_entry.empty:
+            now_ist = dt.now(timezone(timedelta(hours=5, minutes=30))).replace(tzinfo=None)
+            if target_date == now_ist.date():
+                target_entry_dt = dt.strptime(f"{target_date} {entry_time_str}", "%Y-%m-%d %H:%M")
+                if now_ist < target_entry_dt:
+                    result["status"] = "Pending (Candle Forming)"
+                    result["details"] = f"EURUSD 30M signal candle ({c1_str}-{entry_time_str} IST) is currently forming. Entry scheduled at {entry_time_str} IST close."
+                    return result
+            result["status"] = "No Signal Candle"
+            result["details"] = f"Required 30M signal bars ({c1_str}, {c2_str}, {entry_time_str} IST) were not found in session data."
+            return result
+            
+        c_open = b1['open'].iloc[0]
+        c_high = max(b1['high'].iloc[0], b2['high'].iloc[0])
+        c_low = min(b1['low'].iloc[0], b2['low'].iloc[0])
+        c_close = b2['close'].iloc[-1]
+        entry_price = b_entry['open'].iloc[0]
+        
+        # Direction check
+        if c_close > c_open:
+            direction = "long"
+            sl = c_low
+            risk = entry_price - sl
+        elif c_close < c_open:
+            direction = "short"
+            sl = c_high
+            risk = sl - entry_price
+        else:
+            result["status"] = "No Trade (Doji)"
+            result["details"] = f"EURUSD 30M candle closed as Doji (Open={c_open:.5f}, Close={c_close:.5f}). No directional impulse."
+            return result
+            
+        if risk <= 0:
+            result["status"] = "Invalid Risk"
+            result["details"] = "Calculated risk is zero or negative."
+            return result
+            
+        sl_pct = (risk / entry_price) * 100.0
+        risk_pips = risk * 10000.0
+        
+        # Stop Loss Range Filter: 0.035% to 0.065%
+        if sl_pct < 0.035:
+            result["status"] = "Skipped (SL Below 0.035%)"
+            result["details"] = f"Signal candle risk is {sl_pct:.3f}% ({risk_pips:.1f} pips), below the 0.035% minimum threshold. Skipped to prevent market noise."
+            return result
+            
+        if sl_pct > 0.065:
+            result["status"] = "Skipped (SL Above 0.065%)"
+            result["details"] = f"Signal candle risk is {sl_pct:.3f}% ({risk_pips:.1f} pips), exceeding the 0.065% maximum threshold. Skipped to prevent over-extended risk."
+            return result
+            
+        # Target: Exactly 1:5.50 RR
+        rr = 5.50
+        if direction == "long":
+            tp = entry_price + rr * risk
+        else:
+            tp = entry_price - rr * risk
+            
+        tp_pct = (abs(tp - entry_price) / entry_price) * 100.0
+        
+        # Preceding 30M Candle Quality Tiering (Case 2 Model)
+        p1 = day_df[day_df['time_str_ist'] == p1_str]
+        p2 = day_df[day_df['time_str_ist'] == p2_str]
+        is_same_color = False
+        if not p1.empty and not p2.empty:
+            p_open = p1['open'].iloc[0]
+            p_close = p2['close'].iloc[-1]
+            prev_dir = "long" if p_close > p_open else ("short" if p_close < p_open else "doji")
+            is_same_color = (prev_dir == direction)
+            
+        tier = "A++ (Same-Color Continuation)" if is_same_color else "Normal (Reversal Setup)"
+        risk_allocation = 350.0 if is_same_color else 250.0
+        
+        result["direction"] = direction
+        result["entry_price"] = round(entry_price, 5)
+        result["entry_time_ist"] = f"{target_date.strftime('%Y-%m-%d')}T{entry_time_str}"
+        result["sl_price"] = round(sl, 5)
+        result["tp_price"] = round(tp, 5)
+        result["sl_percentage"] = round(sl_pct, 3)
+        result["tp_percentage"] = round(tp_pct, 3)
+        result["status"] = f"Active Setup ({tier})"
+        result["details"] = (
+            f"EURUSD 30M {direction.upper()} validated at {entry_time_str} IST ({season_name}). "
+            f"Entry: {entry_price:.5f}, SL: {sl:.5f} ({risk_pips:.1f} pips / {sl_pct:.3f}%), "
+            f"TP: {tp:.5f} (1:5.50 RR / +{risk_pips * 5.5:.1f} pips). "
+            f"Tier: {tier} (${risk_allocation:.0f} allocation). "
+            f"Protocol: Set & Forget (No BE). News Shield Active (NFP/CPI/FOMC & ECB Monetary Policy)."
+        )
+        return result
+        
+    except Exception as e:
+        result["status"] = "Error"
+        result["details"] = f"EURUSD execution engine error: {str(e)}"
+        return result
+
+
 # ==============================================================================
 # 6. MAIN DASHBOARD VIEW (PREMIUM & ANDROID MOBILE-OPTIMIZED)
 # ==============================================================================
@@ -1616,7 +1829,7 @@ elif passed_evs:
     ev_text = ", ".join([f"{e['title']} ({e['dt_ist'].strftime('%H:%M')} IST)" for e in passed_evs])
     st.success(f"🛡️ **News Shield Clear:** All economic news releases for {curr_query_date.strftime('%b %d, %Y')} have passed ({ev_text}). Unrestricted position holding permitted across all instruments.")
 else:
-    st.info(f"🛡️ **News Shield Clear:** No prohibited high-impact news scheduled on {curr_query_date.strftime('%b %d, %Y')}. Holding permitted across USDJPY, GBPUSD & XAUUSD.")
+    st.info(f"🛡️ **News Shield Clear:** No prohibited high-impact news scheduled on {curr_query_date.strftime('%b %d, %Y')}. Holding permitted across USDJPY, GBPUSD, XAUUSD & EURUSD.")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1638,7 +1851,8 @@ if run_clicked:
     strat_ids = [
         st.session_state.strat_1_id,
         st.session_state.strat_2_id,
-        st.session_state.strat_3_id
+        st.session_state.strat_3_id,
+        st.session_state.strat_4_id
     ]
     
     progress_bar = st.progress(0, text="Starting analysis...")
@@ -1649,16 +1863,18 @@ if run_clicked:
         status_box.info(f"⏳ Analyzing candles for **{d_val.strftime('%A, %B %d, %Y')}** ({idx + 1}/{total_dates})...")
         progress_bar.progress(progress_pct, text=f"Processing {d_val.strftime('%b %d')} ({idx+1}/{total_dates})...")
         
-        # Run 3 models
+        # Run 4 models
         res_u = run_usdjpy_strategy(d_val)
         res_g = run_gbpusd_strategy(d_val)
         res_x = run_xauusd_strategy(d_val)
+        res_e = run_eurusd_strategy(d_val)
         
         day_trades = []
         for strat_out, strat_id in [
             (res_u, strat_ids[0]),
             (res_g, strat_ids[1]),
-            (res_x, strat_ids[2])
+            (res_x, strat_ids[2]),
+            (res_e, strat_ids[3])
         ]:
             if isinstance(strat_out, list):
                 for sub_item in strat_out:
@@ -1780,10 +1996,11 @@ if run_clicked:
     # --------------------------------------------------------------------------
     # Display Tabs
     # --------------------------------------------------------------------------
-    tab_active, tab_table, tab_details = st.tabs([
+    tab_active, tab_table, tab_details, tab_rules = st.tabs([
         f"🔥 Active Signals ({len(active_signals)})",
         "📋 Full Daily Log Table",
-        "🔍 Detailed Breakdown"
+        "🔍 Detailed Breakdown",
+        "📖 Strategy Rules & Conditions"
     ])
     
     with tab_active:
@@ -1878,6 +2095,42 @@ if run_clicked:
                     t_stat = row["Signal"]
                     status_emoji = "🟢" if t_stat == "LONG" else ("🔴" if t_stat == "SHORT" else "⚪")
                     st.markdown(f"**{status_emoji} {row['Symbol']} ({row['Strategy']}):** `{row['Details']}`")
+
+
+    with tab_rules:
+        st.markdown("##### 📖 Complete Rules & Execution Specifications")
+        
+        st.markdown("""
+        <div class="trade-card" style="border-left: 4px solid #38bdf8;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <span style="font-size: 1.2rem; font-weight: 800; color: #38bdf8;">🇪🇺 EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE</span>
+                <span style="background: rgba(56, 189, 248, 0.2); padding: 4px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 700; color: #38bdf8;">Strategy ID: 6ad8f4b28c55371171816449</span>
+            </div>
+            <p style="color: #cbd5e1; font-size: 0.9rem; line-height: 1.6;">
+                <strong>Instrument:</strong> EUR/USD (OANDA: <code>EUR_USD</code>) &bull; <strong>Timeframe:</strong> 30-Minute (<code>M30</code>)<br>
+                <strong>Execution Days:</strong> <strong>Monday & Thursday ONLY</strong> (Tuesdays, Wednesdays & Fridays are strictly excluded to avoid mid-week chop).<br>
+                <strong>Entry Timing:</strong><br>
+                &bull; <strong>Summer (US EDT / DST):</strong> 11:00 AM &ndash; 11:30 AM IST (Entry at <strong>11:30 AM IST candle close</strong>).<br>
+                &bull; <strong>Winter (US EST / Standard):</strong> 12:00 PM &ndash; 12:30 PM IST (Entry at <strong>12:30 PM IST candle close</strong>).<br>
+                <strong>Directional Signal:</strong><br>
+                &bull; 30M Close &gt; Open &rarr; <span style="color: #34d399; font-weight: 700;">LONG (BUY)</span><br>
+                &bull; 30M Close &lt; Open &rarr; <span style="color: #f87171; font-weight: 700;">SHORT (SELL)</span><br>
+                &bull; 30M Close == Open &rarr; Doji (No trade).<br>
+                <strong>Stop Loss (SL):</strong> Opposite extreme of the 30M signal candle (Low for Long, High for Short).<br>
+                <strong>SL Range Filter:</strong> <strong>0.035% to 0.065%</strong> of price (~3.8 to 7.2 pips). Candles with risk &lt; 0.035% or &gt; 0.065% are strictly skipped.<br>
+                <strong>Profit Target (TP):</strong> Strictly <strong>1:5.50 RR</strong> ($5.50 \times \text{Risk}$).<br>
+                <strong>Breakeven (BE) Protocol:</strong> <strong>NONE (No Breakeven)</strong> &mdash; Set & Forget. Position must run strictly to Target (+5.50R) or Stop Loss (-1.00R).<br>
+                <strong>Quality Tiering (Case 2 Allocation):</strong><br>
+                &bull; <strong>Tier A++ ($350 Allocation):</strong> Preceding 30M candle (10:30 Summer / 11:30 Winter) matches signal candle color (Same-Color Continuation).<br>
+                &bull; <strong>Tier Normal ($250 Allocation):</strong> Preceding 30M candle has opposite color (Reversal / Momentum Shift).<br>
+                <strong>Prohibited News Protocols (News Shield):</strong><br>
+                &bull; <strong>EUR-Specific Restricted News:</strong> <strong>ECB Monetary Policy Statement & Rate Decision</strong>.<br>
+                &bull; <strong>USD Restricted News:</strong> <strong>US NFP, CPI, and FOMC Statement</strong>.<br>
+                &bull; <em>Action:</em> Position is closed flat 5 minutes prior to any scheduled prohibited release.<br>
+                <strong>Weekend Holding Rule:</strong> Mandatory flat before Saturday 02:30 AM (Summer) / 03:30 AM (Winter) IST. No weekend exposure.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
 
 else:
     st.info("💡 Choose a **Single Day** or a **Date Range** above, then click **'🚀 Run Strategies'** to stream live OANDA candles and audit trade triggers.")
