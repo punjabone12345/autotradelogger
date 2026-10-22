@@ -18,7 +18,7 @@ except Exception:
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "app_logo.png")
 
 st.set_page_config(
-    page_title="Institutional Trading Terminal",
+    page_title="Auto Trade Logger — 4-Strategy Institutional Terminal",
     page_icon=LOGO_PATH if os.path.exists(LOGO_PATH) else "📈",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -39,31 +39,57 @@ st.markdown("""
         font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
 
-    /* Mobile Header & Typography */
+    /* Mobile Header & Typography matching Cyan & Gold Logo */
     .dashboard-header {
-        background: linear-gradient(135deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 16px;
-        padding: 20px 24px;
-        margin-bottom: 20px;
-        box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
-        backdrop-filter: blur(12px);
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.92) 0%, rgba(11, 26, 44, 0.95) 50%, rgba(15, 23, 42, 0.98) 100%);
+        border: 1px solid rgba(6, 182, 212, 0.25);
+        border-radius: 20px;
+        padding: 22px 26px;
+        margin-bottom: 22px;
+        box-shadow: 0 12px 36px -10px rgba(6, 182, 212, 0.2), 0 0 20px rgba(245, 158, 11, 0.08);
+        backdrop-filter: blur(16px);
     }
     .main-title {
-        font-size: 1.6rem;
+        font-size: 1.75rem;
         font-weight: 800;
-        letter-spacing: -0.02em;
-        background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%);
+        letter-spacing: -0.025em;
+        background: linear-gradient(135deg, #ffffff 0%, #38bdf8 50%, #facc15 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         margin-bottom: 6px;
     }
     .sub-title {
         color: #94a3b8;
-        font-size: 0.9rem;
+        font-size: 0.92rem;
         margin-bottom: 0;
-        line-height: 1.4;
+        line-height: 1.5;
     }
+
+    /* Strategy Dashboard Showcase Grid */
+    .strat-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+    .strat-card {
+        background: linear-gradient(145deg, rgba(15, 23, 42, 0.85) 0%, rgba(11, 19, 36, 0.95) 100%);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 18px;
+        padding: 18px 20px;
+        box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.4);
+        transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+        position: relative;
+        overflow: hidden;
+    }
+    .strat-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 30px -6px rgba(6, 182, 212, 0.25);
+    }
+    .strat-card-usdjpy { border-color: rgba(245, 158, 11, 0.35); }
+    .strat-card-gbpusd { border-color: rgba(16, 185, 129, 0.35); }
+    .strat-card-xauusd { border-color: rgba(234, 179, 8, 0.35); }
+    .strat-card-eurusd { border-color: rgba(56, 189, 248, 0.35); }
 
     /* Touch-friendly Large Buttons */
     .stButton>button {
@@ -72,12 +98,16 @@ st.markdown("""
         min-height: 52px !important;
         font-size: 1.05rem !important;
         font-weight: 700 !important;
-        background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+        background: linear-gradient(135deg, #0284c7 0%, #0369a1 50%, #0f766e 100%) !important;
         color: #ffffff !important;
-        border: 1px solid rgba(255, 255, 255, 0.15) !important;
-        box-shadow: 0 4px 18px 0 rgba(37, 99, 235, 0.45) !important;
+        border: 1px solid rgba(56, 189, 248, 0.3) !important;
+        box-shadow: 0 4px 20px 0 rgba(2, 132, 199, 0.4) !important;
         transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
         margin-top: 10px !important;
+    }
+    .stButton>button:hover {
+        border-color: rgba(250, 204, 21, 0.6) !important;
+        box-shadow: 0 6px 24px 0 rgba(250, 204, 21, 0.35) !important;
     }
     .stButton>button:active {
         transform: scale(0.98) !important;
@@ -86,12 +116,12 @@ st.markdown("""
 
     /* Metric & Control Cards */
     .glass-card {
-        background: rgba(17, 24, 39, 0.7);
+        background: rgba(15, 23, 42, 0.75);
         border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 14px;
-        padding: 16px 18px;
-        backdrop-filter: blur(10px);
-        margin-bottom: 14px;
+        border-radius: 16px;
+        padding: 18px 20px;
+        backdrop-filter: blur(12px);
+        margin-bottom: 16px;
     }
     
     /* Trade Card for Mobile */
@@ -141,7 +171,10 @@ st.markdown("""
         }
         .dashboard-header {
             padding: 16px !important;
-            border-radius: 14px !important;
+            border-radius: 16px !important;
+        }
+        .strat-grid {
+            grid-template-columns: 1fr !important;
         }
         div[data-testid="column"] {
             min-width: 100% !important;
@@ -154,8 +187,7 @@ st.markdown("""
             border-radius: 12px !important;
             padding: 12px 14px !important;
         }
-    }
-</style>
+    }</style>
 """, unsafe_allow_html=True)
 
 # ==============================================================================
@@ -208,8 +240,8 @@ if "end_date" not in st.session_state:
 with st.sidebar:
     if os.path.exists(LOGO_PATH):
         st.image(LOGO_PATH, width=90)
-    st.markdown("### ⚙️ Engine Settings")
-    st.caption("Settings persist across session navigations.")
+    st.markdown("### ⚡ Auto Trade Logger Pro")
+    st.caption("Institutional 4-Strategy Automated Execution Engine")
     
     st.session_state.base44_token = st.text_input(
         "Base44 Personal Access Token",
@@ -1686,19 +1718,19 @@ if os.path.exists(LOGO_PATH):
 
 if logo_b64:
     header_html = f"""
-    <div class="dashboard-header" style="display: flex; align-items: center; gap: 16px;">
-        <img src="data:image/jpeg;base64,{logo_b64}" style="width: 58px; height: 58px; border-radius: 14px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.15); flex-shrink: 0;" />
-        <div>
-            <div class="main-title">⚡ Multi-Strategy Trading Terminal</div>
-            <div class="sub-title">Live OANDA candle analysis & automatic Base44 Trade Journal synchronizer</div>
+    <div class="dashboard-header" style="display: flex; align-items: center; gap: 18px;">
+        <img src="data:image/png;base64,{logo_b64}" style="width: 68px; height: 68px; border-radius: 16px; box-shadow: 0 4px 20px rgba(6, 182, 212, 0.4), 0 0 15px rgba(245, 158, 11, 0.2); border: 2px solid rgba(56, 189, 248, 0.35); flex-shrink: 0;" />
+        <div style="flex-grow: 1;">
+            <div class="main-title">⚡ Auto Trade Logger Terminal</div>
+            <div class="sub-title">Algorithmic 4-Strategy Execution Engine & Real-Time Base44 Journal Synchronizer</div>
         </div>
     </div>
     """
 else:
     header_html = """
     <div class="dashboard-header">
-        <div class="main-title">⚡ Multi-Strategy Trading Terminal</div>
-        <div class="sub-title">Live OANDA candle analysis & automatic Base44 Trade Journal synchronizer</div>
+        <div class="main-title">⚡ Auto Trade Logger Terminal</div>
+        <div class="sub-title">Algorithmic 4-Strategy Execution Engine & Real-Time Base44 Journal Synchronizer</div>
     </div>
     """
 st.markdown(header_html, unsafe_allow_html=True)
@@ -1719,34 +1751,140 @@ env_text = f"({st.session_state.oanda_env.title()})" if st.session_state.oanda_t
 b44_status = "🟢 Armed (4 Strategies)" if st.session_state.base44_token else "🔴 Token Needed"
 
 st.markdown(f"""
-<div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; align-items: center;">
-    <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 999px; padding: 6px 14px; font-size: 0.82rem; color: #94a3b8; display: flex; align-items: center; gap: 8px;">
+<div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; align-items: center;">
+    <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 999px; padding: 6px 14px; font-size: 0.82rem; color: #94a3b8; display: flex; align-items: center; gap: 6px;">
         <span style="font-size: 0.9rem;">🌐</span>
         <span>OANDA Broker Feed: <strong style="color: #f1f5f9;">{oanda_status} {env_text}</strong> &bull; M1, M15, M30, H2</span>
     </div>
-    <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 999px; padding: 6px 14px; font-size: 0.82rem; color: #94a3b8; display: flex; align-items: center; gap: 8px;">
+    <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 999px; padding: 6px 14px; font-size: 0.82rem; color: #94a3b8; display: flex; align-items: center; gap: 6px;">
         <span style="font-size: 0.9rem;">⚡</span>
         <span>Base44 Auto-Journal: <strong style="color: #f1f5f9;">{b44_status}</strong></span>
     </div>
-    <div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 999px; padding: 6px 14px; font-size: 0.82rem; color: #94a3b8; display: flex; align-items: center; gap: 8px;">
+    <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 999px; padding: 6px 14px; font-size: 0.82rem; color: #94a3b8; display: flex; align-items: center; gap: 6px;">
         <span style="font-size: 0.9rem;">🛡️</span>
         <span>News Shield: <strong style="color: #f1f5f9;">Active</strong> (USD NFP/CPI/FOMC &bull; EUR ECB &bull; GBP BOE &bull; JPY BOJ)</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# Top 4 Institutional Strategy Cards (All 4 Models on Dashboard)
-kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-with kpi1:
-    st.metric("🇯🇵 USDJPY Selfsweep", "1:5.00 RRR", "Fee: $40.00 • No Tue")
-with kpi2:
-    st.metric("🇬🇧 GBPUSD Asia Fib", "1:3.75 RRR", "Fee: $40.00 • 1.2-1.4 Fib")
-with kpi3:
-    st.metric("🪙 XAUUSD 2H DOL", "1:3.30 RRR", "Fee: $25.00 • No Thu")
-with kpi4:
-    st.metric("🇪🇺 EURUSD 30M Candle", "1:5.50 RRR", "Case 2 • Mon & Thu Only")
+# ------------------------------------------------------------------------------
+# Top 4 Institutional Strategy Cards (High-Definition Custom Glass Cards)
+# ------------------------------------------------------------------------------
+st.markdown(f"""
+<div class="strat-grid">
+    <!-- Card 1: USDJPY -->
+    <div class="strat-card strat-card-usdjpy">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 1.4rem;">🇯🇵</span>
+                <div>
+                    <div style="font-weight: 800; color: #ffffff; font-size: 1.0rem;">USDJPY Selfsweep</div>
+                    <div style="font-size: 0.72rem; color: #94a3b8;">USD/JPY &bull; M15 Timeframe</div>
+                </div>
+            </div>
+            <span style="background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.4); font-size: 0.78rem; font-weight: 800; padding: 3px 9px; border-radius: 999px;">1:5.00 RR</span>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; font-size: 0.8rem;">
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                <span style="color: #64748b; font-size: 0.7rem;">EXECUTION DAYS</span><br>
+                <strong style="color: #f1f5f9;">Mon, Wed, Thu, Fri</strong>
+            </div>
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                <span style="color: #64748b; font-size: 0.7rem;">RISK & FEE</span><br>
+                <strong style="color: #f1f5f9;">$300 &bull; Fee $40</strong>
+            </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.74rem; color: #94a3b8; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 8px;">
+            <span>SL: 0.045% &ndash; 0.154%</span>
+            <code style="color: #f59e0b; background: rgba(245, 158, 11, 0.1); padding: 2px 6px; border-radius: 6px;">{st.session_state.strat_1_id[:8]}...</code>
+        </div>
+    </div>
 
-st.markdown("<br>", unsafe_allow_html=True)
+    <!-- Card 2: GBPUSD -->
+    <div class="strat-card strat-card-gbpusd">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 1.4rem;">🇬🇧</span>
+                <div>
+                    <div style="font-weight: 800; color: #ffffff; font-size: 1.0rem;">GBPUSD Asia Fib</div>
+                    <div style="font-size: 0.72rem; color: #94a3b8;">GBP/USD &bull; M15 GodMode</div>
+                </div>
+            </div>
+            <span style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); font-size: 0.78rem; font-weight: 800; padding: 3px 9px; border-radius: 999px;">1:3.75 RR</span>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; font-size: 0.8rem;">
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                <span style="color: #64748b; font-size: 0.7rem;">EXECUTION DAYS</span><br>
+                <strong style="color: #f1f5f9;">Monday &ndash; Friday</strong>
+            </div>
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                <span style="color: #64748b; font-size: 0.7rem;">RISK & FEE</span><br>
+                <strong style="color: #f1f5f9;">$300 &bull; Fee $40</strong>
+            </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.74rem; color: #94a3b8; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 8px;">
+            <span>1.2&ndash;1.4 Fib (Double Entry)</span>
+            <code style="color: #10b981; background: rgba(16, 185, 129, 0.1); padding: 2px 6px; border-radius: 6px;">{st.session_state.strat_2_id[:8]}...</code>
+        </div>
+    </div>
+
+    <!-- Card 3: XAUUSD -->
+    <div class="strat-card strat-card-xauusd">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 1.4rem;">🪙</span>
+                <div>
+                    <div style="font-weight: 800; color: #ffffff; font-size: 1.0rem;">XAUUSD 2H DOL</div>
+                    <div style="font-size: 0.72rem; color: #94a3b8;">XAU/USD &bull; H2 Breakout</div>
+                </div>
+            </div>
+            <span style="background: rgba(234, 179, 8, 0.2); color: #fde047; border: 1px solid rgba(234, 179, 8, 0.4); font-size: 0.78rem; font-weight: 800; padding: 3px 9px; border-radius: 999px;">1:3.30 RR</span>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; font-size: 0.8rem;">
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                <span style="color: #64748b; font-size: 0.7rem;">EXECUTION DAYS</span><br>
+                <strong style="color: #f1f5f9;">Mon, Tue, Wed, Fri</strong>
+            </div>
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                <span style="color: #64748b; font-size: 0.7rem;">RISK & FEE</span><br>
+                <strong style="color: #f1f5f9;">$300 &bull; Fee $25</strong>
+            </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.74rem; color: #94a3b8; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 8px;">
+            <span>BE Cushion @ +2.5R</span>
+            <code style="color: #eab308; background: rgba(234, 179, 8, 0.1); padding: 2px 6px; border-radius: 6px;">{st.session_state.strat_3_id[:8]}...</code>
+        </div>
+    </div>
+
+    <!-- Card 4: EURUSD -->
+    <div class="strat-card strat-card-eurusd">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 1.4rem;">🇪🇺</span>
+                <div>
+                    <div style="font-weight: 800; color: #ffffff; font-size: 1.0rem;">EURUSD 30M Candle</div>
+                    <div style="font-size: 0.72rem; color: #94a3b8;">EUR/USD &bull; M30 Frankfurt Impulse</div>
+                </div>
+            </div>
+            <span style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); font-size: 0.78rem; font-weight: 800; padding: 3px 9px; border-radius: 999px;">1:5.50 RR</span>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; font-size: 0.8rem;">
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                <span style="color: #64748b; font-size: 0.7rem;">EXECUTION DAYS</span><br>
+                <strong style="color: #38bdf8;">Monday & Thursday ONLY</strong>
+            </div>
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
+                <span style="color: #64748b; font-size: 0.7rem;">CASE 2 SIZING</span><br>
+                <strong style="color: #f1f5f9;">$350 A++ / $250 Norm</strong>
+            </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.74rem; color: #94a3b8; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 8px;">
+            <span>SL: 0.035% &ndash; 0.065% (No BE)</span>
+            <code style="color: #38bdf8; background: rgba(56, 189, 248, 0.1); padding: 2px 6px; border-radius: 6px;">{st.session_state.strat_4_id[:8]}...</code>
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ------------------------------------------------------------------------------
 # Interactive Date Selection Controller (Single Day or Date Range)
