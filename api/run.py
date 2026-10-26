@@ -1540,10 +1540,19 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
         p_high = day_p['high'].max()
         p_low = day_p['low'].min()
         
+        s_open = day_s.iloc[0]['open']
         s_high = day_s['high'].max()
         s_low = day_s['low'].min()
         s_close = day_s.iloc[-1]['close']
         
+        # Invalidation check
+        if s_open <= p_low or s_open >= p_high:
+            result["status"] = "Skipped (Invalid Open)"
+            result["details"] = "S open opened outside P range."
+            return result
+            
+        is_bullish = s_close > s_open
+        is_bearish = s_close < s_open
         swept_high = s_high > p_high
         swept_low = s_low < p_low
         
@@ -1551,11 +1560,11 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
         sl_raw = 0.0
         rule_name = ""
         
-        if s_close > p_high and not swept_low:
+        if s_close > p_high and is_bullish:
             trade_dir = "long"
             sl_raw = s_low
             rule_name = "BULL BREAKOUT CLEAN" if not swept_low else "BULL BREAKOUT SWEPT"
-        elif s_close < p_low and not swept_high:
+        elif s_close < p_low and is_bearish:
             trade_dir = "short"
             sl_raw = s_high
             rule_name = "BEAR BREAKOUT CLEAN" if not swept_high else "BEAR BREAKOUT SWEPT"
