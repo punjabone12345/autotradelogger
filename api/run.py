@@ -12,6 +12,17 @@ from pydantic import BaseModel
 # ==============================================================================
 # HARDCODED SECRET VARIABLES & STRATEGY IDS
 # ==============================================================================
+# Load .env variables if present
+if os.path.exists(".env"):
+    try:
+        with open(".env") as _env_f:
+            for _line in _env_f:
+                if "=" in _line and not _line.strip().startswith("#"):
+                    _k, _v = _line.strip().split("=", 1)
+                    os.environ.setdefault(_k.strip(), _v.strip().strip('"\''))
+    except Exception:
+        pass
+
 BASE44_API_KEY = os.environ.get("BASE44_API_KEY", "b44u_a42da4afa13a09294364b826325610580674a3365e53e3676ba7693e42240d8f")
 BASE44_API_URL = "https://trading-journal-2-0.base44.app/api/entities/Trade"
 
@@ -19,18 +30,23 @@ STRAT1_ID = os.environ.get("STRAT1_ID", "6acaf2a887cd7b6cb6a1267c")  # USDJPY SE
 STRAT2_ID = os.environ.get("STRAT2_ID", "6acaf29762d5f24891c0c9bc")  # GBPUSD ASIA 1.2 - 1.4 FIB RETRACMENT
 STRAT3_ID = os.environ.get("STRAT3_ID", "6acaf24d7a78a186a5430938")  # XAUUSD 2H 4:30/5:30 DOL
 STRAT4_ID = os.environ.get("STRAT4_ID", "6ad8f4b28c55371171816449")  # EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE
+STRAT5_ID = os.environ.get("STRAT5_ID", "6ad8f4c39d66482282927550")  # NAS100 M15 US OPEN IMPULSE
 
-OANDA_TOKEN = os.environ.get("OANDA_TOKEN", "f2b74d1cee1eb5488ba8b6b067e3ffc6-b6ccbdca86ea9ddb162f03996341ae91")
+OANDA_TOKEN = os.environ.get("OANDA_API_TOKEN") or os.environ.get("OANDA_TOKEN", "f2b74d1cee1eb5488ba8b6b067e3ffc6-b6ccbdca86ea9ddb162f03996341ae91")
 
 # Fixed broker & exchange fees per trade:
 # XAUUSD: $25.00 per trade
 # GBPUSD: $40.00 per trade
 # USDJPY: $40.00 per trade
+# EURUSD: $30.00 per trade
+# NAS100: $20.00 per trade
 FIXED_FEES = {
     "XAUUSD": 25.0,
     "GBPUSD": 40.0,
     "USDJPY": 40.0,
-    "EURUSD": 30.0
+    "EURUSD": 30.0,
+    "NAS100": 20.0,
+    "US100": 20.0
 }
 
 # ==============================================================================
@@ -123,7 +139,7 @@ def fetch_oanda_candles(instrument: str, granularity: str, target_date: datetime
 
 def get_latest_market_price(symbol: str) -> float:
     """Fetches real-time market price for symbol from OANDA."""
-    inst = "EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD"))
+    inst = "NAS100_USD" if ("NAS" in symbol.upper() or "US100" in symbol.upper()) else ("EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD")))
     if not OANDA_TOKEN:
         return 0.0
     for base_url in ["https://api-fxpractice.oanda.com/v3", "https://api-fxtrade.oanda.com/v3"]:
@@ -211,6 +227,8 @@ def calculate_risk_quantity(symbol: str, entry_price: float, sl_price: float, ri
     qty = risk_usd / diff
     if "XAU" in symbol.upper():
         return round(qty, 1)
+    elif "NAS" in symbol.upper() or "US100" in symbol.upper():
+        return round(qty, 2)
     else:
         return round(qty, 0)
 
@@ -227,6 +245,8 @@ def get_trade_fee(symbol: str, user_fee: Optional[float] = None) -> float:
         return FIXED_FEES["USDJPY"]
     elif "EUR" in s:
         return FIXED_FEES["EURUSD"]
+    elif "NAS" in s or "US100" in s:
+        return FIXED_FEES["NAS100"]
     return float(user_fee or 40.0)
 
 # ==============================================================================
@@ -380,8 +400,8 @@ def get_event_symbols(category: str, title: str = "") -> list:
     elif "ECB" in c or "ECB" in t or "EUROPEAN CENTRAL BANK" in t or "ECB_RATE" in c or ("MONETARY POLICY" in t and ("EUR" in t or "ECB" in t or "EURO" in t)):
         return ["EURUSD"]
     elif c in ["NFP", "CPI", "FOMC"]:
-        return ["USDJPY", "GBPUSD", "XAUUSD", "EURUSD"]
-    return ["USDJPY", "GBPUSD", "XAUUSD", "EURUSD"]
+        return ["USDJPY", "GBPUSD", "XAUUSD", "EURUSD", "NAS100"]
+    return ["USDJPY", "GBPUSD", "XAUUSD", "EURUSD", "NAS100"]
 
 # Attach symbol metadata to all historical events
 for ev in HISTORICAL_NEWS_SCHEDULE:
@@ -554,7 +574,7 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
         
     entry_time_str = trade_info.get("entry_time_ist")
     quantity = calculate_risk_quantity(symbol, entry_price, sl_price, risk_usd=risk_usd)
-    inst = "EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD"))
+    inst = "NAS100_USD" if ("NAS" in symbol.upper() or "US100" in symbol.upper()) else ("EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD")))
     candles_df = fetch_oanda_candles(inst, "M15", trade_date, end_date=trade_date + timedelta(days=2))
     
     status = "open"
@@ -573,6 +593,9 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
                 entry_time_str = f"{trade_date.strftime('%Y-%m-%d')}T06:30"
             elif symbol == "USDJPY":
                 entry_time_str = f"{trade_date.strftime('%Y-%m-%d')}T13:30"
+            elif "NAS" in symbol.upper() or "US100" in symbol.upper():
+                _sample_utc = dt(trade_date.year, trade_date.month, trade_date.day, 12, 0, tzinfo=timezone.utc)
+                entry_time_str = f"{trade_date.strftime('%Y-%m-%d')}T19:15" if is_us_dst(_sample_utc) else f"{trade_date.strftime('%Y-%m-%d')}T20:15"
             else:
                 entry_time_str = f"{trade_date.strftime('%Y-%m-%d')}T12:00"
 
@@ -622,8 +645,24 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
                     exit_reason = "Weekend Close"
                     break
 
+            is_nas = ("NAS" in symbol.upper() or "US100" in symbol.upper())
+            sl_buf = 4.0 if is_nas else 0.0
+
+            # Strict Day Close Exit (17:00 ET) for NAS100 (Intraday zero overnight holding)
+            if is_nas:
+                _sample_utc = c_time_utc
+                _is_summer = is_us_dst(_sample_utc)
+                _day_close_t = time(2, 30) if _is_summer else time(3, 30)
+                _next_day = trade_date + timedelta(days=1)
+                if (c_dt_ist.date() == _next_day and c_dt_ist.time() >= _day_close_t) or (c_dt_ist.date() > _next_day):
+                    status = "closed"
+                    exit_price = c['open']
+                    exit_time_str = c_dt_ist.strftime("%Y-%m-%dT%H:%M")
+                    exit_reason = "Day Close Exit (17:00 ET)"
+                    break
+
             if direction == "long":
-                if c_low <= sl_price:
+                if c_low <= (sl_price + sl_buf):
                     status = "closed"
                     exit_price = sl_price
                     exit_reason = "SL Hit"
@@ -634,7 +673,7 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
                     exit_reason = "TP Hit"
                     hit_exit = True
             elif direction == "short":
-                if c_high >= sl_price:
+                if c_high >= (sl_price - sl_buf):
                     status = "closed"
                     exit_price = sl_price
                     exit_reason = "SL Hit"
@@ -865,6 +904,8 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                     tp = entry + 5.0 * risk
                                     entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
                                     entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
+                                    _is_aplus = (target_date.weekday() == 3)
+                                    _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "Standard Setup"
                                     result.update({
                                         "direction": "long",
                                         "entry_price": round(entry, 3),
@@ -873,8 +914,10 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                         "tp_price": round(tp, 3),
                                         "sl_percentage": round(sl_pct, 3),
                                         "tp_percentage": round(sl_pct * 5.0, 3),
-                                        "status": f"Active Signal ({s_name} Long)",
-                                        "details": f"Confirmed M15 Selfsweep in {s_name} session (1:5.0 RRR, upgraded SL extension, day-of-week entry engine)."
+                                        "is_aplus": _is_aplus,
+                                        "tier": _tier,
+                                        "status": f"Active Signal ({s_name} Long - {_tier})",
+                                        "details": f"Confirmed M15 Selfsweep in {s_name} session ({_tier})."
                                     })
                                     return result
                                 elif decision == 'WAIT_NEXT':
@@ -913,6 +956,8 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                         tp = entry + 5.0 * risk
                                         entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
                                         entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
+                                        _is_aplus = (target_date.weekday() == 3)
+                                        _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "Standard Setup"
                                         result.update({
                                             "direction": "long",
                                             "entry_price": round(entry, 3),
@@ -921,8 +966,10 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                             "tp_price": round(tp, 3),
                                             "sl_percentage": round(sl_pct, 3),
                                             "tp_percentage": round(sl_pct * 5.0, 3),
-                                            "status": f"Active Signal ({s_name} Long)",
-                                            "details": f"Confirmed M15 Selfsweep in {s_name} session (1:5.0 RRR, upgraded SL extension, day-of-week entry engine)."
+                                            "is_aplus": _is_aplus,
+                                            "tier": _tier,
+                                            "status": f"Active Signal ({s_name} Long - {_tier})",
+                                            "details": f"Confirmed M15 Selfsweep in {s_name} session ({_tier})."
                                         })
                                         return result
                                     elif decision == 'WAIT_NEXT':
@@ -954,6 +1001,8 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                 tp = entry + 5.0 * risk
                                 entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
                                 entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
+                                _is_aplus = (target_date.weekday() == 3)
+                                _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "Standard Setup"
                                 result.update({
                                     "direction": "long",
                                     "entry_price": round(entry, 3),
@@ -962,8 +1011,10 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                     "tp_price": round(tp, 3),
                                     "sl_percentage": round(sl_pct, 3),
                                     "tp_percentage": round(sl_pct * 5.0, 3),
-                                    "status": f"Active Signal ({s_name} Long)",
-                                    "details": f"Confirmed M15 Selfsweep in {s_name} session (1:5.0 RRR, upgraded SL extension, day-of-week entry engine)."
+                                    "is_aplus": _is_aplus,
+                                    "tier": _tier,
+                                    "status": f"Active Signal ({s_name} Long - {_tier})",
+                                    "details": f"Confirmed M15 Selfsweep in {s_name} session ({_tier})."
                                 })
                                 return result
                             elif decision == 'WAIT_NEXT':
@@ -1013,6 +1064,8 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                     tp = entry - 5.0 * risk
                                     entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
                                     entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
+                                    _is_aplus = (target_date.weekday() == 3)
+                                    _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "Standard Setup"
                                     result.update({
                                         "direction": "short",
                                         "entry_price": round(entry, 3),
@@ -1021,8 +1074,10 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                         "tp_price": round(tp, 3),
                                         "sl_percentage": round(sl_pct, 3),
                                         "tp_percentage": round(sl_pct * 5.0, 3),
-                                        "status": f"Active Signal ({s_name} Short)",
-                                        "details": f"Confirmed M15 Selfsweep in {s_name} session (1:5.0 RRR, upgraded SL extension, day-of-week entry engine)."
+                                        "is_aplus": _is_aplus,
+                                        "tier": _tier,
+                                        "status": f"Active Signal ({s_name} Short - {_tier})",
+                                        "details": f"Confirmed M15 Selfsweep in {s_name} session ({_tier}, 1:5.0 RRR, upgraded SL extension)."
                                     })
                                     return result
                                 elif decision == 'WAIT_NEXT':
@@ -1061,6 +1116,8 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                         tp = entry - 5.0 * risk
                                         entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
                                         entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
+                                        _is_aplus = (target_date.weekday() == 3)
+                                        _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "Standard Setup"
                                         result.update({
                                             "direction": "short",
                                             "entry_price": round(entry, 3),
@@ -1069,8 +1126,10 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                             "tp_price": round(tp, 3),
                                             "sl_percentage": round(sl_pct, 3),
                                             "tp_percentage": round(sl_pct * 5.0, 3),
-                                            "status": f"Active Signal ({s_name} Short)",
-                                            "details": f"Confirmed M15 Selfsweep in {s_name} session (1:5.0 RRR, upgraded SL extension, day-of-week entry engine)."
+                                            "is_aplus": _is_aplus,
+                                            "tier": _tier,
+                                            "status": f"Active Signal ({s_name} Short - {_tier})",
+                                            "details": f"Confirmed M15 Selfsweep in {s_name} session ({_tier})."
                                         })
                                         return result
                                     elif decision == 'WAIT_NEXT':
@@ -1102,6 +1161,8 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                 tp = entry - 5.0 * risk
                                 entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
                                 entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
+                                _is_aplus = (target_date.weekday() == 3)
+                                _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "Standard Setup"
                                 result.update({
                                     "direction": "short",
                                     "entry_price": round(entry, 3),
@@ -1110,8 +1171,10 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                     "tp_price": round(tp, 3),
                                     "sl_percentage": round(sl_pct, 3),
                                     "tp_percentage": round(sl_pct * 5.0, 3),
-                                    "status": f"Active Signal ({s_name} Short)",
-                                    "details": f"Confirmed M15 Selfsweep in {s_name} session (1:5.0 RRR, upgraded SL extension, day-of-week entry engine)."
+                                    "is_aplus": _is_aplus,
+                                    "tier": _tier,
+                                    "status": f"Active Signal ({s_name} Short - {_tier})",
+                                    "details": f"Confirmed M15 Selfsweep in {s_name} session ({_tier})."
                                 })
                                 return result
                             elif decision == 'WAIT_NEXT':
@@ -1160,6 +1223,8 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict:
         "details": "",
         "data_source": "OANDA Live API"
     }
+
+    # Base Strategy: All days (Mon-Fri) allowed; Tuesday excluded from A++ tier only
     
     day_df = pd.DataFrame()
     live_df = fetch_oanda_candles("GBP_USD", "M15", target_date)
@@ -1356,6 +1421,8 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict:
                         if 0.035 <= sl_pct <= 0.154:
                             tp = c_c + 3.75 * risk
                             entry_close_ist = t_curr + timedelta(minutes=15)
+                            _is_aplus = (not touched_04) and (target_date.weekday() != 1)
+                            _tier = "⭐ A++ Setup (Clean -0.2 Long)" if _is_aplus else "Standard Setup"
                             result.update({
                                 "direction": "long",
                                 "entry_price": round(c_c, 5),
@@ -1364,8 +1431,10 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict:
                                 "tp_price": round(tp, 5),
                                 "sl_percentage": round(sl_pct, 3),
                                 "tp_percentage": round(sl_pct * 3.75, 3),
-                                "status": "Active Signal (London Long)",
-                                "details": f"Level -0.2 swept ({lvl_m02:.5f}) with confirmed rejection."
+                                "is_aplus": _is_aplus,
+                                "tier": _tier,
+                                "status": f"Active Signal (London Long - {_tier})",
+                                "details": f"Level -0.2 swept ({lvl_m02:.5f}) with confirmed rejection ({_tier})."
                             })
                             return result
                 else: # short
@@ -1521,6 +1590,10 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
             else:
                 entry_t_str = f"{target_date.strftime('%Y-%m-%d')}T06:30"
                 
+            _c_range = s_high - s_low
+            _body_ratio = abs(s_close - s_open) / _c_range if _c_range > 0 else 0.0
+            _is_aplus = ("CLEAN" in rule_name) and (_body_ratio >= 0.50)
+            _tier = "⭐ A++ Setup (Clean DOL Impulse >=50% Body)" if _is_aplus else "Standard Setup"
             result.update({
                 "direction": trade_dir,
                 "entry_price": round(entry, 2),
@@ -1529,8 +1602,10 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
                 "tp_price": round(tp, 2),
                 "sl_percentage": round(sl_pct, 3),
                 "tp_percentage": round(sl_pct * 3.30, 3),
-                "status": f"Active Signal ({rule_name})",
-                "details": f"2H DOL confirmed: {rule_name}"
+                "is_aplus": _is_aplus,
+                "tier": _tier,
+                "status": f"Active Signal ({rule_name} - {_tier})",
+                "details": f"2H DOL confirmed: {rule_name} ({_tier})"
             })
             return result
         else:
@@ -1652,7 +1727,24 @@ def sync_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict, amoun
     exit_ts_str = lifecycle["exit_time_str"]
     entry_ts_str = lifecycle["entry_time_str"]
     exit_reason = lifecycle.get("exit_reason")
-    notes = f"{sl_pct}% SL ({sl_price}) , {tp_pct}% TP ({tp_price}) | Risk: ${amount:,.2f} | Fee: ${fee:,.2f}"
+    is_aplus = trade_info.get("is_aplus")
+    if is_aplus is None:
+        symbol_u = symbol.upper()
+        if "NAS" in symbol_u or "US100" in symbol_u:
+            is_aplus = (trade_date.weekday() == 1)
+        elif "EUR" in symbol_u:
+            is_aplus = "A++" in str(trade_info.get("tier", "")) or "same-color" in str(trade_info.get("details", "")).lower()
+        elif "JPY" in symbol_u:
+            is_aplus = (trade_date.weekday() == 3)
+        elif "GBP" in symbol_u:
+            is_aplus = (direction == "long") and (trade_date.weekday() != 1) and ("-0.4" not in str(trade_info.get("details", "")))
+        elif "XAU" in symbol_u:
+            is_aplus = "A++" in str(trade_info.get("tier", "")) or (("CLEAN" in str(trade_info.get("details", "")).upper()) and (">=50%" in str(trade_info.get("details", "")) or ">=50%" in str(trade_info.get("tier", ""))))
+        else:
+            is_aplus = False
+
+    setup_tag = "⭐ A++ Setup" if is_aplus else "Standard Setup"
+    notes = f"[{setup_tag}] | {sl_pct}% SL ({sl_price}) , {tp_pct}% TP ({tp_price}) | Risk: ${amount:,.2f} | Fee: ${fee:,.2f}"
     if trade_info.get("entry_no") == 2 or trade_info.get("is_double_entry"):
         notes += " | Double Entry"
     if exit_reason:
@@ -2014,7 +2106,7 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
             is_same_color = (prev_dir == direction)
             
         tier = "A++ (Same-Color Continuation)" if is_same_color else "Normal (Reversal Setup)"
-        risk_allocation = 350.0 if is_same_color else 250.0
+        risk_allocation = 300.0  # Fixed at $300 per strategy rules
         
         result["direction"] = direction
         result["entry_price"] = round(entry_price, 5)
@@ -2023,7 +2115,9 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
         result["tp_price"] = round(tp, 5)
         result["sl_percentage"] = round(sl_pct, 3)
         result["tp_percentage"] = round(tp_pct, 3)
-        result["status"] = f"Active Setup ({tier})"
+        result["is_aplus"] = is_same_color
+        result["tier"] = "⭐ A++ Setup (Same-Color Continuation)" if is_same_color else "Standard Setup (Reversal)"
+        result["status"] = f"Active Setup ({result['tier']})"
         result["details"] = (
             f"EURUSD 30M {direction.upper()} validated at {entry_time_str} IST ({season_name}). "
             f"Entry: {entry_price:.5f}, SL: {sl:.5f} ({risk_pips:.1f} pips / {sl_pct:.3f}%), "
@@ -2037,6 +2131,222 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
         result["status"] = "Error"
         result["details"] = f"EURUSD execution engine error: {str(e)}"
         return result
+
+def run_nas100_strategy(target_date: datetime.date) -> dict:
+    """
+    NAS100 / US100 M15 US Open Impulse Strategy:
+    - Instrument: US100 / NAS100
+    - Timeframe: 15-Minute (M15)
+    - Execution Days: Monday to Thursday ONLY (Fridays & weekends strictly skipped)
+    - Signal Candle: 09:30 AM - 09:45 AM ET (19:00-19:15 IST Summer / 20:00-20:15 IST Winter)
+    - Entry: Exactly at candle close (19:15 IST Summer / 20:15 IST Winter)
+    - Solid Body Ratio: (Body / Range) >= 45.0%
+    - Range % Filter: 0.15% <= (Range / Open) * 100 <= 1.10%
+    - Direction:
+        * Close > Open -> LONG (BUY)
+        * Close < Open -> SHORT (SELL)
+        * Close == Open -> Doji / No Trade
+    - Stop Loss: 50% Midpoint ((High + Low) / 2) extended by 4.0 points buffer:
+        * BUY: Extended SL = Midpoint - 4.0 pts
+        * SELL: Extended SL = Midpoint + 4.0 pts
+    - Stop Loss Corridor Filter: 0.070% <= (Risk / Entry) * 100 <= 0.350% (Strict)
+    - Take Profit: Fixed 1:3.90 RR (3.90 * Extended Risk)
+    - Setup Quality Tiers:
+        * ⭐ A++ Setup: TUESDAY trades (42.5% Win Rate, 3.34 PF, 4.0R Max DD)
+        * Standard Setup: Monday, Wednesday, Thursday trades
+    - Intraday Hard Exit: Strictly flat at 17:00 ET (02:30 AM Summer / 03:30 AM Winter IST)
+    - News Cutoff: Flatten 1m before FOMC Rate Decision (14:00 ET / 23:30 Summer / 00:30 Winter IST)
+    """
+    result_template = {
+        "strategy_name": "NAS100 M15 US OPEN IMPULSE",
+        "symbol": "NAS100",
+        "date": target_date,
+        "direction": "none",
+        "entry_price": 0.0,
+        "entry_time_ist": None,
+        "sl_price": 0.0,
+        "tp_price": 0.0,
+        "sl_percentage": 0.0,
+        "tp_percentage": 0.0,
+        "is_aplus": False,
+        "tier": "Standard Setup",
+        "status": "No Trade Setup",
+        "details": "",
+        "data_source": "OANDA Live API",
+        "strategy_id": STRAT5_ID
+    }
+
+    # Friday / Weekend filter
+    dow = target_date.weekday()
+    if dow == 4:
+        result_template["status"] = "Skipped (Friday Rule)"
+        result_template["details"] = "Fridays are strictly excluded by NAS100 strategy rules."
+        return result_template
+    if dow in [5, 6]:
+        result_template["status"] = "Skipped (Weekend)"
+        result_template["details"] = "Markets closed on weekends."
+        return result_template
+
+    # 1. Fetch live OANDA candles
+    day_df = pd.DataFrame()
+    live_df = fetch_oanda_candles("NAS100_USD", "M15", target_date, end_date=target_date + timedelta(days=2))
+    if not live_df.empty:
+        day_df = live_df[live_df['dt_ist'].dt.date == target_date].sort_values('dt_ist').reset_index(drop=True)
+        result_template["data_source"] = "OANDA Live Feed"
+
+    # 2. TvDatafeed Capital.com fallback
+    if day_df.empty:
+        try:
+            from tvDatafeed import TvDatafeed, Interval
+            tv = TvDatafeed()
+            tv_df = tv.get_hist('US100', 'CAPITALCOM', interval=Interval.in_15_minute, n_bars=150)
+            if tv_df is not None and not tv_df.empty:
+                tv_df = tv_df.reset_index()
+                tv_df['time_utc'] = pd.to_datetime(tv_df['datetime'], utc=True)
+                tv_df['dt_ist'] = tv_df['time_utc'] + pd.Timedelta(hours=5, minutes=30)
+                match = tv_df[tv_df['dt_ist'].dt.date == target_date].sort_values('dt_ist').reset_index(drop=True)
+                if not match.empty:
+                    day_df = match
+                    result_template["data_source"] = "Capital.com Feed (TradingView)"
+        except Exception:
+            pass
+
+    # 3. Local CSV Archives fallback
+    if day_df.empty:
+        for csv_file in ["CAPITALCOM_US100_M15.csv", "NAS100_M15_2024_2026.csv", "CAPITALCOM_US100_15M_RECENT.csv"]:
+            if os.path.exists(csv_file):
+                df_c = pd.read_csv(csv_file)
+                time_col = 'datetime' if 'datetime' in df_c.columns else ('time' if 'time' in df_c.columns else df_c.columns[0])
+                df_c['time_utc'] = pd.to_datetime(df_c[time_col], utc=True)
+                df_c['dt_ist'] = df_c['time_utc'] + pd.Timedelta(hours=5, minutes=30)
+                match = df_c[df_c['dt_ist'].dt.date == target_date].sort_values('dt_ist').reset_index(drop=True)
+                if not match.empty:
+                    day_df = match
+                    result_template["data_source"] = f"Local Archive ({csv_file})"
+                    break
+
+    if day_df.empty or len(day_df) < 4:
+        result_template["status"] = "No Session Data"
+        result_template["details"] = f"Insufficient M15 candle data available for NAS100 on {target_date}."
+        return result_template
+
+    try:
+        sample_utc = day_df['time_utc'].iloc[0]
+        is_summer = is_us_dst(sample_utc)
+
+        # Trigger bar: 09:30-09:45 ET
+        # Summer (EDT): 19:00 IST open, 19:15 IST close (Entry 19:15 IST)
+        # Winter (EST): 20:00 IST open, 20:15 IST close (Entry 20:15 IST)
+        trigger_open_str = "19:00" if is_summer else "20:00"
+        trigger_close_str = "19:15" if is_summer else "20:15"
+
+        day_df['time_str_ist'] = day_df['dt_ist'].dt.strftime('%H:%M')
+        trigger_bar = day_df[day_df['time_str_ist'] == trigger_open_str]
+
+        if trigger_bar.empty:
+            result_template["status"] = f"Waiting for Session (09:30 ET / {trigger_open_str} IST)"
+            result_template["details"] = f"Trigger candle forms at 09:30-09:45 NY time ({trigger_open_str} IST). Awaiting candle close."
+            return result_template
+
+        bar = trigger_bar.iloc[0]
+        c_open = float(bar['open'])
+        c_high = float(bar['high'])
+        c_low = float(bar['low'])
+        c_close = float(bar['close'])
+
+        c_range = c_high - c_low
+        c_body = abs(c_close - c_open)
+
+        if c_range <= 0:
+            result_template["status"] = "No Trade (Zero Range)"
+            result_template["details"] = "Trigger candle range is zero."
+            return result_template
+
+        body_pct = (c_body / c_range) * 100.0
+        range_pct = (c_range / c_open) * 100.0
+
+        if body_pct < 45.0:
+            result_template["status"] = "Skipped (Body < 45%)"
+            result_template["details"] = f"Trigger candle solid body ratio is {body_pct:.1f}% (minimum 45.0% required). Weak impulse."
+            return result_template
+
+        if range_pct < 0.15:
+            result_template["status"] = "Skipped (Range < 0.15%)"
+            result_template["details"] = f"Trigger candle range is {range_pct:.3f}% (below 0.15% minimum threshold). Compression bar."
+            return result_template
+
+        if range_pct > 1.10:
+            result_template["status"] = "Skipped (Range > 1.10%)"
+            result_template["details"] = f"Trigger candle range is {range_pct:.3f}% (above 1.10% maximum threshold). Climax bar."
+            return result_template
+
+        if c_close > c_open:
+            direction = "long"
+        elif c_close < c_open:
+            direction = "short"
+        else:
+            result_template["status"] = "No Trade (Doji)"
+            result_template["details"] = "Trigger candle closed exactly flat (Doji)."
+            return result_template
+
+        midpoint = (c_high + c_low) / 2.0
+        sl_buffer_pts = 4.0
+        if direction == "long":
+            sl = midpoint - sl_buffer_pts
+            risk = c_close - sl
+        else:
+            sl = midpoint + sl_buffer_pts
+            risk = sl - c_close
+
+        if risk <= 0:
+            result_template["status"] = "Invalid Risk"
+            result_template["details"] = "Calculated risk is zero or negative."
+            return result_template
+
+        sl_pct = (risk / c_close) * 100.0
+
+        if sl_pct < 0.070:
+            result_template["status"] = "Skipped (SL Below 0.070%)"
+            result_template["details"] = f"Extended SL is {sl_pct:.3f}% ({risk:.1f} pts), below the 0.070% minimum corridor threshold."
+            return result_template
+
+        if sl_pct > 0.350:
+            result_template["status"] = "Skipped (SL Above 0.350%)"
+            result_template["details"] = f"Extended SL is {sl_pct:.3f}% ({risk:.1f} pts), exceeding the 0.350% maximum corridor threshold."
+            return result_template
+
+        # Target 1:3.90 RR
+        rr = 3.90
+        if direction == "long":
+            tp = c_close + rr * risk
+        else:
+            tp = c_close - rr * risk
+        tp_pct = sl_pct * rr
+
+        # Setup Tier Classification: Tuesday = A++ Setup
+        is_aplus = (dow == 1)
+        tier = "⭐ A++ Setup (Tuesday Power Trade)" if is_aplus else "Standard Setup"
+
+        result_template.update({
+            "direction": direction,
+            "entry_price": round(c_close, 2),
+            "entry_time_ist": f"{target_date.strftime('%Y-%m-%d')}T{trigger_close_str}",
+            "sl_price": round(sl, 2),
+            "tp_price": round(tp, 2),
+            "sl_percentage": round(sl_pct, 3),
+            "tp_percentage": round(tp_pct, 3),
+            "is_aplus": is_aplus,
+            "tier": tier,
+            "risk_allocation": 300.0,
+            "status": f"Active Signal ({tier})",
+            "details": f"Confirmed M15 US Open Impulse ({tier} {'Long' if direction=='long' else 'Short'} @ {c_close:.2f}). Body: {body_pct:.1f}%, Range: {range_pct:.2f}%."
+        })
+        return result_template
+    except Exception as e:
+        result_template["status"] = "Error"
+        result_template["details"] = str(e)
+        return result_template
+
 
 # ==============================================================================
 # FASTAPI ENDPOINTS (VERCEL READY)
@@ -2055,7 +2365,8 @@ async def health_check():
             {"name": "USDJPY SELFSWEEP", "id": STRAT1_ID},
             {"name": "GBPUSD ASIA 1.2 - 1.4 FIB RETRACMENT", "id": STRAT2_ID},
             {"name": "XAUUSD 2H 4:30/5:30 DOL", "id": STRAT3_ID},
-            {"name": "EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE", "id": STRAT4_ID}
+            {"name": "EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE", "id": STRAT4_ID},
+            {"name": "NAS100 M15 US OPEN IMPULSE", "id": STRAT5_ID}
         ],
         "message": "Send POST /api/run with {'date': 'YYYY-MM-DD', 'amount': 300.0, 'fees': 40.0} to execute strategies."
     }
@@ -2117,13 +2428,15 @@ async def run_daily_strategies(payload: RunRequest):
         res_gbpusd = run_gbpusd_strategy(target_date)
         res_xauusd = run_xauusd_strategy(target_date)
         res_eurusd = run_eurusd_strategy(target_date)
+        res_nas100 = run_nas100_strategy(target_date)
 
         day_trades = []
         for strat_out, strat_id in [
             (res_usdjpy, STRAT1_ID),
             (res_gbpusd, STRAT2_ID),
             (res_xauusd, STRAT3_ID),
-            (res_eurusd, STRAT4_ID)
+            (res_eurusd, STRAT4_ID),
+            (res_nas100, STRAT5_ID)
         ]:
             if isinstance(strat_out, list):
                 for sub_item in strat_out:
