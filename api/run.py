@@ -1950,8 +1950,8 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
         * 30M Close > Open -> LONG (BUY)
         * 30M Close < Open -> SHORT (SELL)
         * 30M Close == Open -> Doji / No Trade
-    - Stop Loss: Opposite extreme of the 30M signal candle (Low for Long, High for Short)
-    - Stop Loss Range Filter: 0.035% to 0.065% of price (~3.8 to 7.2 pips). Outside range -> Skipped
+    - Stop Loss: Opposite extreme of the 30M signal candle extended by 1 point (0.00001) beyond extreme level (Low - 1 point for Long, High + 1 point for Short)
+    - Stop Loss Range Filter: 0.035% to 0.065% of price (~3.8 to 7.2 pips) measured after 1 point extension. Outside range -> Skipped
     - Target (Take Profit): Strictly 1:5.50 RR (5.50 * Risk)
     - Breakeven Rule: NONE (No Breakeven / Hold strictly to Target or Stop Loss)
     - Setup Quality Tiers (Case 2 Dynamic Allocation):
@@ -2062,14 +2062,15 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
         c_close = b2['close'].iloc[-1]
         entry_price = b_entry['open'].iloc[0]
         
-        # Direction check
+        # Direction check with 1 point (0.00001) SL extension beyond extreme level:
+        point = 0.00001  # 1 point / pipette buffer beyond candle extreme
         if c_close > c_open:
             direction = "long"
-            sl = c_low
+            sl = round(c_low - point, 5)
             risk = entry_price - sl
         elif c_close < c_open:
             direction = "short"
-            sl = c_high
+            sl = round(c_high + point, 5)
             risk = sl - entry_price
         else:
             result["status"] = "No Trade (Doji)"
@@ -2081,28 +2082,28 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
             result["details"] = "Calculated risk is zero or negative."
             return result
             
-        sl_pct = (risk / entry_price) * 100.0
+        sl_pct = round((risk / entry_price) * 100.0, 3)
         risk_pips = risk * 10000.0
         
-        # Stop Loss Range Filter: 0.035% to 0.065%
+        # Stop Loss Range Filter: 0.035% to 0.065% (measured after 1 point extension)
         if sl_pct < 0.035:
             result["status"] = "Skipped (SL Below 0.035%)"
-            result["details"] = f"Signal candle risk is {sl_pct:.3f}% ({risk_pips:.1f} pips), below the 0.035% minimum threshold. Skipped to prevent market noise."
+            result["details"] = f"Signal candle risk with 1 point extension is {sl_pct:.3f}% ({risk_pips:.1f} pips), below the 0.035% minimum threshold. Skipped to prevent market noise."
             return result
             
         if sl_pct > 0.065:
             result["status"] = "Skipped (SL Above 0.065%)"
-            result["details"] = f"Signal candle risk is {sl_pct:.3f}% ({risk_pips:.1f} pips), exceeding the 0.065% maximum threshold. Skipped to prevent over-extended risk."
+            result["details"] = f"Signal candle risk with 1 point extension is {sl_pct:.3f}% ({risk_pips:.1f} pips), exceeding the 0.065% maximum threshold. Skipped to prevent over-extended risk."
             return result
             
         # Target: Exactly 1:5.50 RR
         rr = 5.50
         if direction == "long":
-            tp = entry_price + rr * risk
+            tp = round(entry_price + rr * risk, 5)
         else:
-            tp = entry_price - rr * risk
+            tp = round(entry_price - rr * risk, 5)
             
-        tp_pct = (abs(tp - entry_price) / entry_price) * 100.0
+        tp_pct = round((abs(tp - entry_price) / entry_price) * 100.0, 3)
         
         # Preceding 30M Candle Quality Tiering (Case 2 Model)
         p1 = day_df[day_df['time_str_ist'] == p1_str]
