@@ -2,14 +2,13 @@
 name = "autotradelogger"
 version = "0.1.0"
 description = "Auto Trade Logger FastAPI backend for Base44"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.13"
 dependencies = [
     "fastapi>=0.110.0",
     "uvicorn>=0.28.0",
     "requests>=2.31.0",
     "pandas>=2.2.0",
     "pydantic>=2.6.0",
-    "tvdatafeed>=2.1.0",
     "websocket-client>=1.8.0",
 ]
 
