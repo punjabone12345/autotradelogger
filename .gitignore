@@ -1,5 +1,6 @@
 # Data files & archives
 *.csv
+!CAPITALCOM_US100_15M_RECENT.csv
 *.zip
 *.exe
 *.log

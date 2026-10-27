@@ -9,6 +9,8 @@ dependencies = [
     "requests>=2.31.0",
     "pandas>=2.2.0",
     "pydantic>=2.6.0",
+    "tvdatafeed>=2.1.0",
+    "websocket-client>=1.8.0",
 ]
 
 [tool.vercel]
