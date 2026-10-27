@@ -368,31 +368,72 @@ def fetch_oanda_candles(instrument: str, granularity: str, target_date: datetime
     return pd.DataFrame()
 
 
+_TV_FEED = None
+
+def fetch_capitalcom_tv_hist(interval, n_bars: int = 350, retries: int = 3) -> Optional[pd.DataFrame]:
+    """
+    Singleton connection to Capital.com via tvDatafeed with automatic reconnection & retry.
+    """
+    global _TV_FEED
+    import time
+    try:
+        from tvDatafeed import TvDatafeed
+    except ImportError:
+        return None
+
+    for attempt in range(retries):
+        try:
+            if _TV_FEED is None:
+                _TV_FEED = TvDatafeed()
+            df = _TV_FEED.get_hist(symbol='US100', exchange='CAPITALCOM', interval=interval, n_bars=n_bars)
+            if df is not None and not df.empty:
+                return df
+        except Exception:
+            try:
+                _TV_FEED = TvDatafeed()
+            except Exception:
+                _TV_FEED = None
+        time.sleep(1)
+    return None
+
 def fetch_capitalcom_nas100_candles(target_date: Optional[datetime.date] = None) -> pd.DataFrame:
     """
     Fetches real-time Capital.com US100 M15 candles via tvDatafeed.
+    Caches results into CAPITALCOM_US100_15M_RECENT.csv.
     Timestamps are strictly local IST.
     """
     try:
-        from tvDatafeed import TvDatafeed, Interval
-        tv = TvDatafeed()
-        df = tv.get_hist(symbol='US100', exchange='CAPITALCOM', interval=Interval.in_15_minute, n_bars=300)
+        from tvDatafeed import Interval
+        df = fetch_capitalcom_tv_hist(Interval.in_15_minute, n_bars=350)
         if df is not None and not df.empty:
             df = df.reset_index()
-            # df['datetime'] is already in IST
+            df['datetime_str'] = df['datetime'].astype(str)
             df['dt_ist'] = pd.to_datetime(df['datetime'])
             df['time_utc'] = (df['dt_ist'] - pd.Timedelta(hours=5, minutes=30)).dt.tz_localize('UTC')
+            
+            # Persist latest bars to disk cache
+            try:
+                csv_path = "CAPITALCOM_US100_15M_RECENT.csv"
+                existing = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
+                if not existing.empty:
+                    existing['datetime_str'] = existing['datetime'].astype(str)
+                df_to_save = df[['datetime_str', 'symbol', 'open', 'high', 'low', 'close', 'volume']].rename(columns={'datetime_str': 'datetime'})
+                combined = pd.concat([existing, df_to_save]).drop_duplicates(subset=['datetime']).sort_values('datetime').reset_index(drop=True)
+                combined.to_csv(csv_path, index=False)
+            except Exception:
+                pass
+                
             return df
     except Exception:
         pass
         
-    for csv_file in ["CAPITALCOM_US100_15M_RECENT.csv", "CAPITALCOM_US100_M15.csv", "NAS100_M15_2024_2026.csv"]:
+    for csv_file in ["CAPITALCOM_US100_15M_RECENT.csv", "CAPITALCOM_US100_M15.csv"]:
         if os.path.exists(csv_file):
             try:
                 df_c = pd.read_csv(csv_file)
                 t_col = 'datetime' if 'datetime' in df_c.columns else ('time' if 'time' in df_c.columns else df_c.columns[0])
                 df_c['dt_ist'] = pd.to_datetime(df_c[t_col])
-                df_c['time_utc'] = df_c['dt_ist'] - pd.Timedelta(hours=5, minutes=30)
+                df_c['time_utc'] = (df_c['dt_ist'] - pd.Timedelta(hours=5, minutes=30)).dt.tz_localize('UTC')
                 return df_c
             except Exception:
                 pass
@@ -402,14 +443,23 @@ def get_latest_market_price(symbol: str) -> float:
     """Fetches real-time market price. Strictly uses Capital.com for NAS100."""
     if "NAS" in symbol.upper() or "US100" in symbol.upper():
         try:
-            from tvDatafeed import TvDatafeed, Interval
-            tv = TvDatafeed()
-            df_m1 = tv.get_hist(symbol='US100', exchange='CAPITALCOM', interval=Interval.in_1_minute, n_bars=2)
+            from tvDatafeed import Interval
+            df_m1 = fetch_capitalcom_tv_hist(Interval.in_1_minute, n_bars=3)
             if df_m1 is not None and not df_m1.empty:
                 return float(df_m1.iloc[-1]['close'])
         except Exception:
             pass
-    inst = "NAS100_USD" if ("NAS" in symbol.upper() or "US100" in symbol.upper()) else ("EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD")))
+        # Fall back to latest close from local Capital.com CSV
+        for csv_file in ["CAPITALCOM_US100_15M_RECENT.csv", "CAPITALCOM_US100_M15.csv"]:
+            if os.path.exists(csv_file):
+                try:
+                    df_c = pd.read_csv(csv_file)
+                    return float(df_c.iloc[-1]['close'])
+                except Exception:
+                    pass
+        return 0.0
+
+    inst = ("EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD")))
     token = st.session_state.oanda_token if "oanda_token" in st.session_state else os.environ.get("OANDA_TOKEN", "")
     if not token:
         return 0.0
@@ -481,7 +531,38 @@ def fetch_m1_exit_time(instrument: str, start_dt_utc: datetime.datetime, end_dt_
     """
     Scans 1-minute (M1) candles between entry time and M15 exit window to find the exact minute
     and candle close timestamp when Stop Loss or Take Profit was triggered in IST.
+    Strictly scans Capital.com M1 feed for NAS100 / US100.
     """
+    if "NAS" in instrument.upper() or "US100" in instrument.upper():
+        try:
+            from tvDatafeed import Interval
+            m1_df = fetch_capitalcom_tv_hist(Interval.in_1_minute, n_bars=350)
+            if m1_df is not None and not m1_df.empty:
+                m1_df = m1_df.reset_index()
+                m1_df['dt_ist'] = pd.to_datetime(m1_df['datetime'])
+                if hasattr(m1_df['dt_ist'].dt, 'tz') and m1_df['dt_ist'].dt.tz is not None:
+                    m1_dt = m1_df['dt_ist'].dt.tz_localize(None)
+                else:
+                    m1_dt = m1_df['dt_ist']
+                    
+                s_naive = (start_dt_utc + timedelta(hours=5, minutes=30)).replace(tzinfo=None) if hasattr(start_dt_utc, 'tzinfo') and start_dt_utc.tzinfo else (start_dt_utc + timedelta(hours=5, minutes=30))
+                e_naive = (end_dt_utc + timedelta(hours=5, minutes=30)).replace(tzinfo=None) if hasattr(end_dt_utc, 'tzinfo') and end_dt_utc.tzinfo else (end_dt_utc + timedelta(hours=5, minutes=30))
+                
+                sub = m1_df[(m1_dt >= s_naive) & (m1_dt <= e_naive)].sort_values('datetime')
+                for _, row in sub.iterrows():
+                    h, l = float(row['high']), float(row['low'])
+                    row_dt = pd.to_datetime(row['datetime'])
+                    t_str = row_dt.strftime("%Y-%m-%dT%H:%M")
+                    if direction == "long":
+                        if l <= sl_price or h >= tp_price:
+                            return t_str
+                    else:
+                        if h >= sl_price or l <= tp_price:
+                            return t_str
+        except Exception:
+            pass
+        return None
+
     token = st.session_state.oanda_token if "oanda_token" in st.session_state else os.environ.get("OANDA_TOKEN", "f2b74d1cee1eb5488ba8b6b067e3ffc6-b6ccbdca86ea9ddb162f03996341ae91")
     if not token:
         return None
@@ -645,7 +726,6 @@ def evaluate_trade_lifecycle(trade_info: dict) -> dict:
                     break
 
             is_nas = ("NAS" in symbol.upper() or "US100" in symbol.upper())
-            sl_buf = 4.0 if is_nas else 0.0
 
             # Strict Day Close Exit (17:00 ET) for NAS100 (Intraday zero overnight holding)
             if is_nas:
@@ -661,7 +741,7 @@ def evaluate_trade_lifecycle(trade_info: dict) -> dict:
                     break
 
             if direction == "long":
-                if c_low <= (sl_price + sl_buf):
+                if c_low <= sl_price:
                     status = "closed"
                     exit_price = sl_price
                     exit_reason = "SL Hit"
@@ -672,7 +752,7 @@ def evaluate_trade_lifecycle(trade_info: dict) -> dict:
                     exit_reason = "TP Hit"
                     hit_exit = True
             elif direction == "short":
-                if c_high >= (sl_price - sl_buf):
+                if c_high >= sl_price:
                     status = "closed"
                     exit_price = sl_price
                     exit_reason = "SL Hit"
@@ -739,7 +819,9 @@ def find_existing_trade(api_key: str, strategy_id: str, symbol: str, trade_date:
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
-    params = {"q": f'{{"strategy_id": "{strategy_id}", "symbol": "{symbol}"}}'}
+    is_nas = ("NAS" in symbol.upper() or "US100" in symbol.upper())
+    strat_ids = [strategy_id, "6ad8f4c39d66482282927550", "6ae0c1bc9071eb9969df6a9f"] if is_nas else [strategy_id]
+    params = {"q": f'{{"symbol": "{symbol}"}}'}
     try:
         resp = requests.get(BASE44_API_URL, headers=headers, params=params, timeout=10)
         if resp.status_code == 200:
@@ -747,13 +829,14 @@ def find_existing_trade(api_key: str, strategy_id: str, symbol: str, trade_date:
             items = data.get("items", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
             date_str = trade_date.isoformat()
             for item in items:
-                entry_ts = str(item.get("entry_timestamp", ""))
-                if entry_time_ist:
-                    if entry_ts == entry_time_ist:
-                        return item
-                else:
-                    if entry_ts.startswith(date_str):
-                        return item
+                if item.get("strategy_id") in strat_ids:
+                    entry_ts = str(item.get("entry_timestamp", ""))
+                    if entry_time_ist:
+                        if entry_ts == entry_time_ist:
+                            return item
+                    else:
+                        if entry_ts.startswith(date_str):
+                            return item
     except Exception as e:
         print(f"Error checking existing trade: {e}")
     return None
@@ -821,36 +904,42 @@ def sync_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict) -> tu
         "Content-Type": "application/json"
     }
     
-    # 2. Check if already exists in Base44 (with exact entry timestamp)
+# 2. Check if already exists in Base44 (with exact entry timestamp)
     existing = find_existing_trade(api_key, strategy_id, symbol, trade_date, entry_time_ist=entry_ts_str)
     if existing:
         t_id = existing.get("id")
-        if existing.get("status") == "open":
-            # Update open trade to closed (or refresh live exit price)
-            put_payload = {
-                "strategy_id": strategy_id,
-                "symbol": symbol,
-                "direction": direction.lower(),
-                "buy_price": float(entry_price),
-                "sell_price": float(exit_price),
-                "quantity": float(quantity),
-                "entry_timestamp": entry_ts_str if entry_ts_str else existing.get("entry_timestamp"),
-                "exit_timestamp": exit_ts_str,
-                "status": status,
-                "net_pnl": float(net_pnl),
-                "notes": notes
-            }
-            try:
-                put_r = requests.put(f"{BASE44_API_URL}/{t_id}", headers=headers, json=put_payload, timeout=10)
-                if put_r.status_code in [200, 201]:
-                    action_label = "Closed at TP/SL" if status == "closed" else "Open (Live P&L Updated)"
-                    return "Updated", f"{action_label}: exit @ {exit_price} | Net P&L: ${net_pnl:+.2f} (Fee: ${fee:,.2f})"
-                else:
-                    return "Error", f"HTTP {put_r.status_code}: {put_r.text}"
-            except Exception as e:
-                return "Error", f"Update failed: {e}"
-        else:
-            return "Skipped (Duplicate)", f"Trade already closed @ {existing.get('sell_price')} (Net P&L: ${existing.get('net_pnl', 0):+.2f})"
+        # Check if already 100% up to date with exact prices and strategy ID
+        is_already_accurate = (
+            existing.get("status") == status and
+            existing.get("strategy_id") == strategy_id and
+            abs(float(existing.get("buy_price", 0.0)) - float(entry_price)) < 0.05 and
+            abs(float(existing.get("sell_price", 0.0)) - float(exit_price)) < 0.05
+        )
+        if is_already_accurate:
+            return "Skipped (Duplicate)", f"Trade already accurately logged @ {existing.get('sell_price')} (Net P&L: ${existing.get('net_pnl', 0):+.2f})"
+
+        put_payload = {
+            "strategy_id": strategy_id,
+            "symbol": symbol,
+            "direction": direction.lower(),
+            "buy_price": float(entry_price),
+            "sell_price": float(exit_price),
+            "quantity": float(quantity),
+            "entry_timestamp": entry_ts_str if entry_ts_str else existing.get("entry_timestamp"),
+            "exit_timestamp": exit_ts_str,
+            "status": status,
+            "net_pnl": float(net_pnl),
+            "notes": notes
+        }
+        try:
+            put_r = requests.put(f"{BASE44_API_URL}/{t_id}", headers=headers, json=put_payload, timeout=10)
+            if put_r.status_code in [200, 201]:
+                action_label = "Closed at TP/SL" if status == "closed" else "Open (Live P&L Updated)"
+                return "Updated", f"{action_label}: exit @ {exit_price} | Net P&L: ${net_pnl:+.2f} (Fee: ${fee:,.2f})"
+            else:
+                return "Error", f"HTTP {put_r.status_code}: {put_r.text}"
+        except Exception as e:
+            return "Error", f"Update failed: {e}"
             
     # 3. Create fresh record (POST)
     payload = {
@@ -930,6 +1019,10 @@ def check_and_update_all_open_trades(api_key: str) -> list[dict]:
                     sl_dist = buy_price * 0.005
                     sl_price = buy_price - sl_dist if direction == "long" else buy_price + sl_dist
                     tp_price = buy_price + 3.30 * sl_dist if direction == "long" else buy_price - 3.30 * sl_dist
+                elif "NAS" in sym.upper() or "US100" in sym.upper():
+                    sl_dist = buy_price * 0.0018
+                    sl_price = buy_price - sl_dist if direction == "long" else buy_price + sl_dist
+                    tp_price = buy_price + 3.90 * sl_dist if direction == "long" else buy_price - 3.90 * sl_dist
                     
             entry_ts = trade.get("entry_timestamp", "")
             try:
