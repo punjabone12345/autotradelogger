@@ -90,8 +90,8 @@ class TvDatafeed:
     @staticmethod
     def __filter_raw_message(text):
         try:
-            found = re.search('"m":"(.+?)",', text).group(1)
-            found2 = re.search('"p":(.+?"}"])}', text).group(1)
+            found = re.search(r'"m":"(.+?)",', text).group(1)
+            found2 = re.search(r'"p":(.+?"}"])}', text).group(1)
 
             return found, found2
         except AttributeError:
@@ -133,14 +133,14 @@ class TvDatafeed:
     @staticmethod
     def __create_df(raw_data, symbol):
         try:
-            out = re.search('"s":\[(.+?)\}\]', raw_data).group(1)
+            out = re.search(r'"s":\[(.+?)\}\]', raw_data).group(1)
             x = out.split(',{"')
             data = list()
             volume_data = True
 
             for xi in x:
-                xi = re.split("\[|:|,|\]", xi)
-                ts = datetime.datetime.fromtimestamp(float(xi[4]))
+                xi = re.split(r"\[|:|,|\]", xi)
+                ts = datetime.datetime.fromtimestamp(float(xi[4]), tz=datetime.timezone.utc)
 
                 row = [ts]
 

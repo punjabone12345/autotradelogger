@@ -181,25 +181,28 @@ def fetch_capitalcom_nas100_candles(target_date: Optional[datetime.date] = None)
     """
     Fetches real-time Capital.com US100 M15 candles via tvDatafeed.
     Caches results into CAPITALCOM_US100_15M_RECENT.csv.
-    Timestamps are strictly local IST.
+    Timestamps: time_utc (UTC aware) and dt_ist (local naive IST).
     """
     try:
         from tvDatafeed import Interval
         df = fetch_capitalcom_tv_hist(Interval.in_15_minute, n_bars=350)
         if df is not None and not df.empty:
             df = df.reset_index()
-            df['datetime_str'] = df['datetime'].astype(str)
-            df['dt_ist'] = pd.to_datetime(df['datetime'])
-            df['time_utc'] = (df['dt_ist'] - pd.Timedelta(hours=5, minutes=30)).dt.tz_localize('UTC')
+            df['time_utc'] = pd.to_datetime(df['datetime'], utc=True)
+            df['dt_ist'] = (df['time_utc'] + pd.Timedelta(hours=5, minutes=30)).dt.tz_localize(None)
+            df['datetime'] = df['dt_ist'].astype(str)
             
             # Persist latest bars to disk cache
             try:
                 csv_path = "CAPITALCOM_US100_15M_RECENT.csv"
                 existing = pd.read_csv(csv_path) if os.path.exists(csv_path) else pd.DataFrame()
-                if not existing.empty:
-                    existing['datetime_str'] = existing['datetime'].astype(str)
-                df_to_save = df[['datetime_str', 'symbol', 'open', 'high', 'low', 'close', 'volume']].rename(columns={'datetime_str': 'datetime'})
-                combined = pd.concat([existing, df_to_save]).drop_duplicates(subset=['datetime']).sort_values('datetime').reset_index(drop=True)
+                df_to_save = df[['datetime', 'time_utc', 'dt_ist', 'symbol', 'open', 'high', 'low', 'close', 'volume']].copy()
+                df_to_save['time_utc'] = df_to_save['time_utc'].astype(str)
+                df_to_save['dt_ist'] = df_to_save['dt_ist'].astype(str)
+                if not existing.empty and 'time_utc' in existing.columns:
+                    combined = pd.concat([existing, df_to_save]).drop_duplicates(subset=['time_utc']).sort_values('time_utc').reset_index(drop=True)
+                else:
+                    combined = df_to_save
                 combined.to_csv(csv_path, index=False)
             except Exception:
                 pass
@@ -212,10 +215,18 @@ def fetch_capitalcom_nas100_candles(target_date: Optional[datetime.date] = None)
         if os.path.exists(csv_file):
             try:
                 df_c = pd.read_csv(csv_file)
-                t_col = 'datetime' if 'datetime' in df_c.columns else ('time' if 'time' in df_c.columns else df_c.columns[0])
-                df_c['dt_ist'] = pd.to_datetime(df_c[t_col])
-                df_c['time_utc'] = (df_c['dt_ist'] - pd.Timedelta(hours=5, minutes=30)).dt.tz_localize('UTC')
-                return df_c
+                if 'time_utc' in df_c.columns:
+                    df_c['time_utc'] = pd.to_datetime(df_c['time_utc'], utc=True)
+                    df_c['dt_ist'] = (df_c['time_utc'] + pd.Timedelta(hours=5, minutes=30)).dt.tz_localize(None)
+                    return df_c
+                elif 'dt_ist' in df_c.columns:
+                    df_c['dt_ist'] = pd.to_datetime(df_c['dt_ist'])
+                    df_c['time_utc'] = (df_c['dt_ist'] - pd.Timedelta(hours=5, minutes=30)).dt.tz_localize('UTC')
+                    return df_c
+                elif 'datetime' in df_c.columns:
+                    df_c['dt_ist'] = pd.to_datetime(df_c['datetime'])
+                    df_c['time_utc'] = (df_c['dt_ist'] - pd.Timedelta(hours=5, minutes=30)).dt.tz_localize('UTC')
+                    return df_c
             except Exception:
                 pass
     return pd.DataFrame()
@@ -268,20 +279,16 @@ def fetch_m1_exit_time(instrument: str, start_dt_utc: datetime.datetime, end_dt_
             m1_df = fetch_capitalcom_tv_hist(Interval.in_1_minute, n_bars=350)
             if m1_df is not None and not m1_df.empty:
                 m1_df = m1_df.reset_index()
-                # Ensure naive IST comparison
-                m1_df['dt_ist'] = pd.to_datetime(m1_df['datetime'])
-                if hasattr(m1_df['dt_ist'].dt, 'tz') and m1_df['dt_ist'].dt.tz is not None:
-                    m1_dt = m1_df['dt_ist'].dt.tz_localize(None)
-                else:
-                    m1_dt = m1_df['dt_ist']
-                    
+                m1_df['time_utc'] = pd.to_datetime(m1_df['datetime'], utc=True)
+                m1_df['dt_ist'] = (m1_df['time_utc'] + pd.Timedelta(hours=5, minutes=30)).dt.tz_localize(None)
+                
                 s_naive = (start_dt_utc + timedelta(hours=5, minutes=30)).replace(tzinfo=None) if hasattr(start_dt_utc, 'tzinfo') and start_dt_utc.tzinfo else (start_dt_utc + timedelta(hours=5, minutes=30))
                 e_naive = (end_dt_utc + timedelta(hours=5, minutes=30)).replace(tzinfo=None) if hasattr(end_dt_utc, 'tzinfo') and end_dt_utc.tzinfo else (end_dt_utc + timedelta(hours=5, minutes=30))
                 
-                sub = m1_df[(m1_dt >= s_naive) & (m1_dt <= e_naive)].sort_values('datetime')
+                sub = m1_df[(m1_df['dt_ist'] >= s_naive) & (m1_df['dt_ist'] <= e_naive)].sort_values('dt_ist')
                 for _, row in sub.iterrows():
                     h, l = float(row['high']), float(row['low'])
-                    row_dt = pd.to_datetime(row['datetime'])
+                    row_dt = row['dt_ist']
                     t_str = row_dt.strftime("%Y-%m-%dT%H:%M")
                     if direction == "long":
                         if l <= sl_price or h >= tp_price:
@@ -2354,21 +2361,7 @@ def run_nas100_strategy(target_date: datetime.date) -> dict:
         match = cap_df[cap_df['dt_ist'].dt.date == target_date].sort_values('dt_ist').reset_index(drop=True)
         if not match.empty:
             day_df = match
-            result_template["data_source"] = "Capital.com Live Feed (TradingView)"
-
-    # 3. Local CSV Archives fallback
-    if day_df.empty:
-        for csv_file in ["CAPITALCOM_US100_M15.csv", "NAS100_M15_2024_2026.csv", "CAPITALCOM_US100_15M_RECENT.csv"]:
-            if os.path.exists(csv_file):
-                df_c = pd.read_csv(csv_file)
-                time_col = 'datetime' if 'datetime' in df_c.columns else ('time' if 'time' in df_c.columns else df_c.columns[0])
-                df_c['time_utc'] = pd.to_datetime(df_c[time_col], utc=True)
-                df_c['dt_ist'] = df_c['time_utc'] + pd.Timedelta(hours=5, minutes=30)
-                match = df_c[df_c['dt_ist'].dt.date == target_date].sort_values('dt_ist').reset_index(drop=True)
-                if not match.empty:
-                    day_df = match
-                    result_template["data_source"] = f"Local Archive ({csv_file})"
-                    break
+            result_template["data_source"] = "Capital.com Feed (TradingView)"
 
     if day_df.empty or len(day_df) < 4:
         result_template["status"] = "No Session Data"
