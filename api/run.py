@@ -718,7 +718,7 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
         gross_pnl = (entry_price - exit_price) * quantity
         
     net_pnl = gross_pnl - fee
-    decimals = 5 if "GBP" in symbol else (3 if "JPY" in symbol else 2)
+    decimals = 5 if ("GBP" in symbol or "EUR" in symbol) else (3 if "JPY" in symbol else 2)
         
     return {
         "status": status,
@@ -1952,7 +1952,7 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
         * 30M Close == Open -> Doji / No Trade
     - Stop Loss: Opposite extreme of the 30M signal candle extended by 1 point (0.00001) beyond extreme level (Low - 1 point for Long, High + 1 point for Short)
     - Stop Loss Range Filter: 0.035% to 0.065% of price (~3.8 to 7.2 pips) measured after 1 point extension. Outside range -> Skipped
-    - Target (Take Profit): Strictly 1:5.50 RR (5.50 * Risk)
+    - Target (Take Profit): Strictly 1:5.40 RR (5.40 * Risk)
     - Breakeven Rule: NONE (No Breakeven / Hold strictly to Target or Stop Loss)
     - Setup Quality Tiers (Case 2 Dynamic Allocation):
         * A++ Setup (Preceding 30M candle is same color continuation): $350 risk
@@ -2096,8 +2096,8 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
             result["details"] = f"Signal candle risk with 1 point extension is {sl_pct:.3f}% ({risk_pips:.1f} pips), exceeding the 0.065% maximum threshold. Skipped to prevent over-extended risk."
             return result
             
-        # Target: Exactly 1:5.50 RR
-        rr = 5.50
+        # Target: Exactly 1:5.40 RR
+        rr = 5.40
         if direction == "long":
             tp = round(entry_price + rr * risk, 5)
         else:
@@ -2131,7 +2131,7 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
         result["details"] = (
             f"EURUSD 30M {direction.upper()} validated at {entry_time_str} IST ({season_name}). "
             f"Entry: {entry_price:.5f}, SL: {sl:.5f} ({risk_pips:.1f} pips / {sl_pct:.3f}%), "
-            f"TP: {tp:.5f} (1:5.50 RR / +{risk_pips * 5.5:.1f} pips). "
+            f"TP: {tp:.5f} (1:5.40 RR / +{risk_pips * 5.4:.1f} pips). "
             f"Tier: {tier} (${risk_allocation:.0f} allocation). "
             f"Protocol: Set & Forget (No BE). News Shield Active (NFP/CPI/FOMC & ECB Monetary Policy)."
         )

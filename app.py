@@ -677,7 +677,7 @@ def evaluate_trade_lifecycle(trade_info: dict) -> dict:
     return {
         "status": status,
         "entry_time_str": entry_time_str,
-        "exit_price": round(exit_price, 5 if "GBP" in symbol else (3 if "JPY" in symbol else 2)),
+        "exit_price": round(exit_price, 5 if ("GBP" in symbol or "EUR" in symbol) else (3 if "JPY" in symbol else 2)),
         "exit_time_str": exit_time_str,
         "quantity": quantity,
         "gross_pnl": round(gross_pnl, 2),
@@ -1588,7 +1588,7 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
         * 30M Close == Open -> Doji / No Trade
     - Stop Loss: Opposite extreme of the 30M signal candle extended by 1 point (0.00001) beyond extreme level (Low - 1 point for Long, High + 1 point for Short)
     - Stop Loss Range Filter: 0.035% to 0.065% of price (~3.8 to 7.2 pips) measured after 1 point extension. Outside range -> Skipped
-    - Target (Take Profit): Strictly 1:5.50 RR (5.50 * Risk)
+    - Target (Take Profit): Strictly 1:5.40 RR (5.40 * Risk)
     - Breakeven Rule: NONE (No Breakeven / Hold strictly to Target or Stop Loss)
     - Setup Quality Tiers (Case 2 Dynamic Allocation):
         * A++ Setup (Preceding 30M candle is same color continuation): $350 risk
@@ -1731,8 +1731,8 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
             result["details"] = f"Signal candle risk with 1 point extension is {sl_pct:.3f}% ({risk_pips:.1f} pips), exceeding the 0.065% maximum threshold. Skipped to prevent over-extended risk."
             return result
             
-        # Target: Exactly 1:5.50 RR
-        rr = 5.50
+        # Target: Exactly 1:5.40 RR
+        rr = 5.40
         if direction == "long":
             tp = round(entry_price + rr * risk, 5)
         else:
@@ -1767,7 +1767,7 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
         result["details"] = (
             f"EURUSD 30M {direction.upper()} validated at {entry_time_str} IST ({season_name}). "
             f"Entry: {entry_price:.5f}, SL: {sl:.5f} ({risk_pips:.1f} pips / {sl_pct:.3f}%), "
-            f"TP: {tp:.5f} (1:5.50 RR / +{risk_pips * 5.5:.1f} pips). "
+            f"TP: {tp:.5f} (1:5.40 RR / +{risk_pips * 5.4:.1f} pips). "
             f"Tier: {tier} (${risk_allocation:.0f} allocation). "
             f"Protocol: Set & Forget (No BE). News Shield Active (NFP/CPI/FOMC & ECB Monetary Policy)."
         )
@@ -2158,7 +2158,7 @@ st.markdown(f"""
                     <div style="font-size: 0.72rem; color: #94a3b8;">EUR/USD &bull; M30 Frankfurt Impulse</div>
                 </div>
             </div>
-            <span style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); font-size: 0.78rem; font-weight: 800; padding: 3px 9px; border-radius: 999px;">1:5.50 RR</span>
+            <span style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); font-size: 0.78rem; font-weight: 800; padding: 3px 9px; border-radius: 999px;">1:5.40 RR</span>
         </div>
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; font-size: 0.8rem;">
             <div style="background: rgba(15, 23, 42, 0.6); padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
@@ -2167,7 +2167,7 @@ st.markdown(f"""
             </div>
             <div style="background: rgba(15, 23, 42, 0.6); padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
                 <span style="color: #64748b; font-size: 0.7rem;">CASE 2 SIZING</span><br>
-                <strong style="color: #f1f5f9;">$350 A++ / $250 Norm</strong>
+                <strong style="color: #f1f5f9;">$300 Fixed Risk</strong>
             </div>
         </div>
         <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.74rem; color: #94a3b8; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 8px;">
@@ -2765,7 +2765,7 @@ else:
             <div style="background: rgba(15, 23, 42, 0.7); border: 1px solid rgba(56, 189, 248, 0.3); border-radius: 12px; padding: 14px;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                     <span style="font-weight: 800; color: #38bdf8; font-size: 1.0rem;">🇪🇺 EURUSD 30M Candle</span>
-                    <span style="background: rgba(56, 189, 248, 0.2); color: #7dd3fc; font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 8px;">1:5.50 RR</span>
+                    <span style="background: rgba(56, 189, 248, 0.2); color: #7dd3fc; font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 8px;">1:5.40 RR</span>
                 </div>
                 <div style="color: #94a3b8; font-size: 0.82rem; line-height: 1.5;">
                     &bull; <strong>Timeframe:</strong> M30 &bull; <strong>Fee:</strong> $0.00 (Flat)<br>
