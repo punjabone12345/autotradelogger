@@ -30,7 +30,7 @@ STRAT1_ID = os.environ.get("STRAT1_ID", "6acaf2a887cd7b6cb6a1267c")  # USDJPY SE
 STRAT2_ID = os.environ.get("STRAT2_ID", "6acaf29762d5f24891c0c9bc")  # GBPUSD ASIA 1.2 - 1.4 FIB RETRACMENT
 STRAT3_ID = os.environ.get("STRAT3_ID", "6acaf24d7a78a186a5430938")  # XAUUSD 2H 4:30/5:30 DOL
 STRAT4_ID = os.environ.get("STRAT4_ID", "6ad8f4b28c55371171816449")  # EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE
-STRAT5_ID = os.environ.get("STRAT5_ID", "6ad8f4c39d66482282927550")  # NAS100 M15 US OPEN IMPULSE
+STRAT5_ID = os.environ.get("STRAT5_ID", "6ae0c1bc9071eb9969df6a9f")  # NAS100 7 OR 8 PM CANDLE
 
 OANDA_TOKEN = os.environ.get("OANDA_API_TOKEN") or os.environ.get("OANDA_TOKEN", "f2b74d1cee1eb5488ba8b6b067e3ffc6-b6ccbdca86ea9ddb162f03996341ae91")
 
@@ -85,6 +85,11 @@ def is_us_dst(dt_utc: datetime.datetime) -> bool:
     d_nov = datetime.date(year, 11, 1)
     nov_first_sun = 1 + (6 - d_nov.weekday()) % 7
     dst_end = datetime.datetime(year, 11, nov_first_sun, 6, 0, tzinfo=timezone.utc)
+    try:
+        if not hasattr(dt_utc, 'tzinfo') or dt_utc.tzinfo is None:
+            dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+    except Exception:
+        pass
     return dst_start <= dt_utc < dst_end
 
 # ==============================================================================
@@ -137,8 +142,48 @@ def fetch_oanda_candles(instrument: str, granularity: str, target_date: datetime
             continue
     return pd.DataFrame()
 
+
+def fetch_capitalcom_nas100_candles(target_date: Optional[datetime.date] = None) -> pd.DataFrame:
+    """
+    Fetches real-time Capital.com US100 M15 candles via tvDatafeed.
+    Timestamps are strictly local IST.
+    """
+    try:
+        from tvDatafeed import TvDatafeed, Interval
+        tv = TvDatafeed()
+        df = tv.get_hist(symbol='US100', exchange='CAPITALCOM', interval=Interval.in_15_minute, n_bars=300)
+        if df is not None and not df.empty:
+            df = df.reset_index()
+            # df['datetime'] is already in IST
+            df['dt_ist'] = pd.to_datetime(df['datetime'])
+            df['time_utc'] = (df['dt_ist'] - pd.Timedelta(hours=5, minutes=30)).dt.tz_localize('UTC')
+            return df
+    except Exception:
+        pass
+        
+    for csv_file in ["CAPITALCOM_US100_15M_RECENT.csv", "CAPITALCOM_US100_M15.csv", "NAS100_M15_2024_2026.csv"]:
+        if os.path.exists(csv_file):
+            try:
+                df_c = pd.read_csv(csv_file)
+                t_col = 'datetime' if 'datetime' in df_c.columns else ('time' if 'time' in df_c.columns else df_c.columns[0])
+                df_c['dt_ist'] = pd.to_datetime(df_c[t_col])
+                df_c['time_utc'] = df_c['dt_ist'] - pd.Timedelta(hours=5, minutes=30)
+                return df_c
+            except Exception:
+                pass
+    return pd.DataFrame()
+
 def get_latest_market_price(symbol: str) -> float:
-    """Fetches real-time market price for symbol from OANDA."""
+    """Fetches real-time market price. Strictly uses Capital.com for NAS100."""
+    if "NAS" in symbol.upper() or "US100" in symbol.upper():
+        try:
+            from tvDatafeed import TvDatafeed, Interval
+            tv = TvDatafeed()
+            df_m1 = tv.get_hist(symbol='US100', exchange='CAPITALCOM', interval=Interval.in_1_minute, n_bars=2)
+            if df_m1 is not None and not df_m1.empty:
+                return float(df_m1.iloc[-1]['close'])
+        except Exception:
+            pass
     inst = "NAS100_USD" if ("NAS" in symbol.upper() or "US100" in symbol.upper()) else ("EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD")))
     if not OANDA_TOKEN:
         return 0.0
@@ -159,7 +204,28 @@ def fetch_m1_exit_time(instrument: str, start_dt_utc: datetime.datetime, end_dt_
     """
     Scans 1-minute (M1) candles between entry time and exit candle to find the exact minute
     and candle close timestamp when Stop Loss or Take Profit was triggered in IST.
+    Strictly scans Capital.com M1 feed for NAS100 / US100.
     """
+    if "NAS" in instrument.upper() or "US100" in instrument.upper():
+        try:
+            from tvDatafeed import TvDatafeed, Interval
+            tv = TvDatafeed()
+            m1_df = tv.get_hist(symbol='US100', exchange='CAPITALCOM', interval=Interval.in_1_minute, n_bars=300)
+            if m1_df is not None and not m1_df.empty:
+                m1_df = m1_df.reset_index()
+                m1_df['dt_ist'] = pd.to_datetime(m1_df['datetime'])
+                start_ist = start_dt_utc + pd.Timedelta(hours=5, minutes=30)
+                end_ist = end_dt_utc + pd.Timedelta(hours=5, minutes=30)
+                sub = m1_df[(m1_df['dt_ist'] >= start_ist) & (m1_df['dt_ist'] <= end_ist)].sort_values('dt_ist')
+                for _, row in sub.iterrows():
+                    h, l = float(row['high']), float(row['low'])
+                    t_str = row['dt_ist'].strftime("%Y-%m-%dT%H:%M")
+                    if direction == "long":
+                        if l <= sl_price or h >= tp_price: return t_str
+                    else:
+                        if h >= sl_price or l <= tp_price: return t_str
+        except Exception:
+            pass
     if not OANDA_TOKEN:
         return None
     headers = {"Authorization": f"Bearer {OANDA_TOKEN}"}
@@ -574,8 +640,13 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
         
     entry_time_str = trade_info.get("entry_time_ist")
     quantity = calculate_risk_quantity(symbol, entry_price, sl_price, risk_usd=risk_usd)
-    inst = "NAS100_USD" if ("NAS" in symbol.upper() or "US100" in symbol.upper()) else ("EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD")))
-    candles_df = fetch_oanda_candles(inst, "M15", trade_date, end_date=trade_date + timedelta(days=2))
+    is_nas = ("NAS" in symbol.upper() or "US100" in symbol.upper())
+    if is_nas:
+        candles_df = fetch_capitalcom_nas100_candles(trade_date)
+        inst = "CAPITALCOM:US100"
+    else:
+        inst = ("EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD")))
+        candles_df = fetch_oanda_candles(inst, "M15", trade_date, end_date=trade_date + timedelta(days=2))
     
     status = "open"
     exit_price = get_latest_market_price(symbol)
@@ -2168,7 +2239,7 @@ def run_nas100_strategy(target_date: datetime.date) -> dict:
     - News Cutoff: Flatten 1m before FOMC Rate Decision (14:00 ET / 23:30 Summer / 00:30 Winter IST)
     """
     result_template = {
-        "strategy_name": "NAS100 M15 US OPEN IMPULSE",
+        "strategy_name": "NAS100 7 OR 8 PM CANDLE",
         "symbol": "NAS100",
         "date": target_date,
         "direction": "none",
@@ -2197,29 +2268,14 @@ def run_nas100_strategy(target_date: datetime.date) -> dict:
         result_template["details"] = "Markets closed on weekends."
         return result_template
 
-    # 1. Fetch live OANDA candles
+    # 1. Fetch live Capital.com candles (MANDATORY & EXCLUSIVE for NAS100)
     day_df = pd.DataFrame()
-    live_df = fetch_oanda_candles("NAS100_USD", "M15", target_date, end_date=target_date + timedelta(days=2))
-    if not live_df.empty:
-        day_df = live_df[live_df['dt_ist'].dt.date == target_date].sort_values('dt_ist').reset_index(drop=True)
-        result_template["data_source"] = "OANDA Live Feed"
-
-    # 2. TvDatafeed Capital.com fallback
-    if day_df.empty:
-        try:
-            from tvDatafeed import TvDatafeed, Interval
-            tv = TvDatafeed()
-            tv_df = tv.get_hist('US100', 'CAPITALCOM', interval=Interval.in_15_minute, n_bars=150)
-            if tv_df is not None and not tv_df.empty:
-                tv_df = tv_df.reset_index()
-                tv_df['time_utc'] = pd.to_datetime(tv_df['datetime'], utc=True)
-                tv_df['dt_ist'] = tv_df['time_utc'] + pd.Timedelta(hours=5, minutes=30)
-                match = tv_df[tv_df['dt_ist'].dt.date == target_date].sort_values('dt_ist').reset_index(drop=True)
-                if not match.empty:
-                    day_df = match
-                    result_template["data_source"] = "Capital.com Feed (TradingView)"
-        except Exception:
-            pass
+    cap_df = fetch_capitalcom_nas100_candles(target_date)
+    if not cap_df.empty:
+        match = cap_df[cap_df['dt_ist'].dt.date == target_date].sort_values('dt_ist').reset_index(drop=True)
+        if not match.empty:
+            day_df = match
+            result_template["data_source"] = "Capital.com Live Feed (TradingView)"
 
     # 3. Local CSV Archives fallback
     if day_df.empty:
@@ -2376,7 +2432,7 @@ async def health_check():
             {"name": "GBPUSD ASIA 1.2 - 1.4 FIB RETRACMENT", "id": STRAT2_ID},
             {"name": "XAUUSD 2H 4:30/5:30 DOL", "id": STRAT3_ID},
             {"name": "EURUSD 30 MIN 11:00 AM / 12 NOON CANDLE", "id": STRAT4_ID},
-            {"name": "NAS100 M15 US OPEN IMPULSE", "id": STRAT5_ID}
+            {"name": "NAS100 7 OR 8 PM CANDLE", "id": STRAT5_ID}
         ],
         "message": "Send POST /api/run with {'date': 'YYYY-MM-DD', 'amount': 300.0, 'fees': 40.0} to execute strategies."
     }
