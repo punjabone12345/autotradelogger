@@ -79,6 +79,15 @@ class RunRequest(BaseModel):
     amount: Optional[float] = 300.0
     fees: Optional[float] = 40.0
 
+DEFAULT_AMOUNT = 300.0
+NAS100_AMOUNT = 200.0
+
+def get_strategy_risk_amount(symbol: str, default_amount: float = 300.0) -> float:
+    """Returns fixed risk allocation: $200 for NAS100 / US100, default_amount ($300) for other pairs."""
+    if "NAS" in str(symbol).upper() or "US100" in str(symbol).upper():
+        return NAS100_AMOUNT
+    return default_amount
+
 # ==============================================================================
 # TIMEZONE & DST HELPERS
 # ==============================================================================
@@ -353,13 +362,18 @@ def fetch_m1_exit_time(instrument: str, start_dt_utc: datetime.datetime, end_dt_
 # ==============================================================================
 # POSITION SIZING & FEES LOGIC
 # ==============================================================================
-def calculate_risk_quantity(symbol: str, entry_price: float, sl_price: float, risk_usd: float = 300.0) -> float:
+def calculate_risk_quantity(symbol: str, entry_price: float, sl_price: float, risk_usd: float | None = None) -> float:
     """
     Calculates exact risk-based position size to risk precisely risk_usd on Stop Loss:
-    Quantity = Risk ($300 default) / |entry_price - sl_price|
+    - $200 on NAS100 / US100
+    - $300 on other pairs (USDJPY, GBPUSD, XAUUSD, EURUSD)
+    Quantity = Risk / |entry_price - sl_price|
     - XAUUSD: Rounded to 1 decimal place (ounces).
+    - NAS100: Rounded to 2 decimal places (CFD contracts).
     - GBPUSD & USDJPY: Rounded to whole units.
     """
+    if risk_usd is None:
+        risk_usd = get_strategy_risk_amount(symbol)
     diff = abs(entry_price - sl_price)
     if diff <= 0:
         return 1.0
@@ -712,7 +726,8 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
         trade_date = datetime.date.today()
         
     entry_time_str = trade_info.get("entry_time_ist")
-    quantity = calculate_risk_quantity(symbol, entry_price, sl_price, risk_usd=risk_usd)
+    strat_risk = trade_info.get("risk_allocation", get_strategy_risk_amount(symbol, default_amount=risk_usd))
+    quantity = calculate_risk_quantity(symbol, entry_price, sl_price, risk_usd=strat_risk)
     is_nas = ("NAS" in symbol.upper() or "US100" in symbol.upper())
     if is_nas:
         candles_df = fetch_capitalcom_nas100_candles(trade_date)
@@ -1873,7 +1888,8 @@ def sync_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict, amoun
     elif not trade_date:
         trade_date = datetime.date.today()
 
-    lifecycle = evaluate_trade_lifecycle(trade_info, risk_usd=amount, fee_override=fees)
+    strat_risk = trade_info.get("risk_allocation", get_strategy_risk_amount(symbol, default_amount=amount))
+    lifecycle = evaluate_trade_lifecycle(trade_info, risk_usd=strat_risk, fee_override=fees)
     quantity = lifecycle["quantity"]
     status = lifecycle["status"]
     exit_price = lifecycle["exit_price"]
@@ -1899,7 +1915,7 @@ def sync_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict, amoun
             is_aplus = False
 
     setup_tag = "⭐ A++ Setup" if is_aplus else "Standard Setup"
-    notes = f"[{setup_tag}] | {sl_pct}% SL ({sl_price}) , {tp_pct}% TP ({tp_price}) | Risk: ${amount:,.2f} | Fee: ${fee:,.2f}"
+    notes = f"[{setup_tag}] | {sl_pct}% SL ({sl_price}) , {tp_pct}% TP ({tp_price}) | Risk: ${strat_risk:,.2f} | Fee: ${fee:,.2f}"
     if trade_info.get("entry_no") == 2 or trade_info.get("is_double_entry"):
         notes += " | Double Entry"
     if exit_reason:
@@ -2475,7 +2491,7 @@ def run_nas100_strategy(target_date: datetime.date) -> dict:
             "tp_percentage": round(tp_pct, 3),
             "is_aplus": is_aplus,
             "tier": tier,
-            "risk_allocation": 300.0,
+            "risk_allocation": 200.0,
             "status": f"Active Signal ({tier})",
             "details": f"Confirmed M15 US Open Impulse ({tier} {'Long' if direction=='long' else 'Short'} @ {c_close:.2f}). Body: {body_pct:.1f}%, Range: {range_pct:.2f}%."
         })
@@ -2598,8 +2614,9 @@ async def run_daily_strategies(payload: RunRequest):
 
             if is_active:
                 active_count += 1
+                strat_risk = strat_result.get("risk_allocation", get_strategy_risk_amount(strat_result["symbol"], default_amount=amount))
                 sync_status, sync_msg, record_data = sync_trade_to_base44(
-                    BASE44_API_KEY, strat_id, strat_result, amount=amount, fees=fees
+                    BASE44_API_KEY, strat_id, strat_result, amount=strat_risk, fees=fees
                 )
                 if sync_status == "Success":
                     logged_count += 1

@@ -195,6 +195,13 @@ st.markdown("""
 # 1. SESSION STATE INITIALIZATION
 # ==============================================================================
 DEFAULT_AMOUNT = 300.0  # $300 risk amount per strategy
+NAS100_AMOUNT = 200.0   # $200 risk amount specifically for NAS100
+
+def get_strategy_risk_amount(symbol: str) -> float:
+    """Returns fixed risk allocation: $200 for NAS100 / US100, $300 for all other pairs."""
+    if "NAS" in symbol.upper() or "US100" in symbol.upper():
+        return NAS100_AMOUNT
+    return DEFAULT_AMOUNT
 
 if "base44_token" not in st.session_state:
     st.session_state.base44_token = os.environ.get(
@@ -519,13 +526,18 @@ def get_trade_fee(symbol: str) -> float:
         return FIXED_FEES["NAS100"]
     return 0.0
 
-def calculate_risk_quantity(symbol: str, entry_price: float, sl_price: float, risk_usd: float = DEFAULT_AMOUNT) -> float:
+def calculate_risk_quantity(symbol: str, entry_price: float, sl_price: float, risk_usd: float | None = None) -> float:
     """
-    Calculates exact risk-based position size to risk precisely $300 on Stop Loss:
-    Quantity = Risk ($300) / |entry_price - sl_price|
+    Calculates exact risk-based position size to risk precisely:
+    - $200 on NAS100 / US100
+    - $300 on other pairs (USDJPY, GBPUSD, XAUUSD, EURUSD)
+    Quantity = Risk / |entry_price - sl_price|
     - XAUUSD: Rounded to 1 decimal place (ounces/contracts).
+    - NAS100: Rounded to 2 decimal places (CFD contracts).
     - GBPUSD & USDJPY: Rounded to whole units.
     """
+    if risk_usd is None:
+        risk_usd = get_strategy_risk_amount(symbol)
     diff = abs(entry_price - sl_price)
     if diff <= 0:
         return 1.0
@@ -647,7 +659,7 @@ def evaluate_trade_lifecycle(trade_info: dict) -> dict:
     # Pre-existing entry time if provided by strategy engine (at candle close)
     entry_time_str = trade_info.get("entry_time_ist")
     
-    risk_allocation = trade_info.get("risk_allocation", DEFAULT_AMOUNT)
+    risk_allocation = trade_info.get("risk_allocation", get_strategy_risk_amount(symbol))
     quantity = calculate_risk_quantity(symbol, entry_price, sl_price, risk_usd=risk_allocation)
     is_nas = ("NAS" in symbol.upper() or "US100" in symbol.upper())
     if is_nas:
@@ -901,7 +913,8 @@ def sync_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict) -> tu
             is_aplus = False
 
     setup_tag = "⭐ A++ Setup" if is_aplus else "Standard Setup"
-    notes = f"[{setup_tag}] | {sl_pct}% SL ({sl_price}) , {tp_pct}% TP ({tp_price}) | Risk: ${trade_info.get('risk_allocation', DEFAULT_AMOUNT):,.2f} | Fee: ${fee:,.2f}"
+    strat_risk = trade_info.get('risk_allocation', get_strategy_risk_amount(symbol))
+    notes = f"[{setup_tag}] | {sl_pct}% SL ({sl_price}) , {tp_pct}% TP ({tp_price}) | Risk: ${strat_risk:,.2f} | Fee: ${fee:,.2f}"
     if trade_info.get("entry_no") == 2 or trade_info.get("is_double_entry"):
         notes += " | Double Entry"
     if exit_reason:
@@ -2102,7 +2115,7 @@ def run_nas100_strategy(target_date: datetime.date) -> dict:
             "tp_percentage": round(tp_pct, 3),
             "is_aplus": is_aplus,
             "tier": tier,
-            "risk_allocation": 300.0,
+            "risk_allocation": 200.0,
             "status": f"Active Signal ({tier})",
             "details": f"Confirmed M15 US Open Impulse ({tier} {'Long' if direction=='long' else 'Short'} @ {c_close:.2f}). Body: {body_pct:.1f}%, Range: {range_pct:.2f}%."
         })
@@ -2312,7 +2325,7 @@ st.markdown(f"""
             </div>
             <div style="background: rgba(15, 23, 42, 0.6); padding: 7px 9px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
                 <span style="color: #64748b; font-size: 0.7rem;">RISK & FEE</span><br>
-                <strong style="color: #f1f5f9;">$300 &bull; Fee $25</strong>
+                <strong style="color: #f1f5f9;">$200 &bull; Fee $20</strong>
             </div>
         </div>
         <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.74rem; color: #94a3b8; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 8px;">
@@ -2538,7 +2551,7 @@ if run_clicked:
                     "Status": status_lifecycle,
                     "SL%": f"{trade['sl_percentage']}%",
                     "TP%": f"{trade['tp_percentage']}%",
-                    "Risk ($)": f"${trade.get('risk_allocation', DEFAULT_AMOUNT):,.2f}",
+                    "Risk ($)": f"${trade.get('risk_allocation', get_strategy_risk_amount(trade['symbol'])):,.2f}",
                     "Base44 Sync": status_text,
                     "Details": msg,
                     "Feed": trade.get("data_source", "OANDA"),
@@ -2568,7 +2581,7 @@ if run_clicked:
                     "Status": "NO SETUP" if "Blocked" not in trade["status"] else "BLOCKED",
                     "SL%": "-",
                     "TP%": "-",
-                    "Risk ($)": f"${trade.get('risk_allocation', DEFAULT_AMOUNT):,.2f}",
+                    "Risk ($)": f"${trade.get('risk_allocation', get_strategy_risk_amount(trade['symbol'])):,.2f}",
                     "Base44 Sync": "N/A (No Setup)" if "Blocked" not in trade["status"] else "Blocked (Pending Active)",
                     "Details": trade["status"] + (f" ({trade['details']})" if trade['details'] else ""),
                     "Feed": trade.get("data_source", "OANDA"),
@@ -2596,7 +2609,7 @@ if run_clicked:
     with m3:
         st.metric("Base44 Synced", f"{synced_count} Updated", f"🛡️ {dup_count} Duplicates" if dup_count else "Fresh Entries")
     with m4:
-        st.metric("Risk Allocation", f"${DEFAULT_AMOUNT:,.2f}", "Per Valid Signal")
+        st.metric("Risk Allocation", "$300 / $200 NAS", "Per Valid Signal")
         
     st.markdown("---")
     
@@ -2644,7 +2657,7 @@ if run_clicked:
                             <span style="font-weight: 700; color: #34d399; font-size: 0.95rem;">{t['TP']} ({t['TP%']})</span>
                         </div>
                         <div style="background: rgba(15, 23, 42, 0.6); padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
-                            <span style="color: #64748b; font-size: 0.75rem;">LOT SIZE (RISK $300)</span><br>
+                            <span style="color: #64748b; font-size: 0.75rem;">LOT SIZE (RISK {t['Risk ($)']})</span><br>
                             <span style="font-weight: 700; color: #38bdf8; font-size: 0.95rem;">{t['Lot Size']}</span>
                         </div>
                         <div style="background: rgba(15, 23, 42, 0.6); padding: 8px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
@@ -2900,7 +2913,7 @@ else:
                     <span style="background: rgba(168, 85, 247, 0.2); color: #c084fc; font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 8px;">1:3.90 RR</span>
                 </div>
                 <div style="color: #94a3b8; font-size: 0.82rem; line-height: 1.5;">
-                    &bull; <strong>Timeframe:</strong> M15 &bull; <strong>Fee:</strong> $20.00 &bull; <strong>Risk:</strong> $300 Fixed<br>
+                    &bull; <strong>Timeframe:</strong> M15 &bull; <strong>Fee:</strong> $20.00 &bull; <strong>Risk:</strong> $200 Fixed<br>
                     &bull; <strong>Days:</strong> Mon, Tue, Wed, Thu (No Fri)<br>
                     &bull; <strong>Trigger:</strong> 09:30 ET Bar, 45% Body, 4pt Buffer SL<br>
                     &bull; <strong>A++ Edge:</strong> Tuesday ⭐ A++ Setup (3.34 PF)<br>
