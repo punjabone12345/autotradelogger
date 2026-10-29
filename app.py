@@ -1783,7 +1783,7 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
     day_df = pd.DataFrame()
     live_df = fetch_oanda_candles("EUR_USD", "M15", target_date)
     if not live_df.empty:
-        day_df = live_df.copy()
+        day_df = live_df[live_df['dt_ist'].dt.date == target_date].sort_values('time_utc').reset_index(drop=True)
         result["data_source"] = "OANDA Live Feed"
         
     if day_df.empty:
@@ -1838,7 +1838,7 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
         b2 = day_df[day_df['time_str_ist'] == c2_str]
         b_entry = day_df[day_df['time_str_ist'] == entry_time_str]
         
-        if b1.empty or b2.empty or b_entry.empty:
+        if b1.empty or b2.empty:
             now_ist = dt.now(timezone(timedelta(hours=5, minutes=30))).replace(tzinfo=None)
             if target_date == now_ist.date():
                 target_entry_dt = dt.strptime(f"{target_date} {entry_time_str}", "%Y-%m-%d %H:%M")
@@ -1847,14 +1847,14 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
                     result["details"] = f"EURUSD 30M signal candle ({c1_str}-{entry_time_str} IST) is currently forming. Entry scheduled at {entry_time_str} IST close."
                     return result
             result["status"] = "No Signal Candle"
-            result["details"] = f"Required 30M signal bars ({c1_str}, {c2_str}, {entry_time_str} IST) were not found in session data."
+            result["details"] = f"Required 30M signal bars ({c1_str}, {c2_str} IST) were not found in session data."
             return result
             
         c_open = b1['open'].iloc[0]
         c_high = max(b1['high'].iloc[0], b2['high'].iloc[0])
         c_low = min(b1['low'].iloc[0], b2['low'].iloc[0])
         c_close = b2['close'].iloc[-1]
-        entry_price = b_entry['open'].iloc[0]
+        entry_price = b_entry['open'].iloc[0] if not b_entry.empty else c_close
         
         # Direction check with 1 point (0.00001) SL extension beyond extreme level:
         point = 0.00001  # 1 point / pipette buffer beyond candle extreme
