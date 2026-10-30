@@ -908,9 +908,11 @@ def sync_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict) -> tu
         elif "GBP" in symbol_u:
             is_aplus = (direction == "long") and (trade_date.weekday() != 1) and ("-0.4" not in str(trade_info.get("details", "")))
         elif "XAU" in symbol_u:
-            is_aplus = "A++" in str(trade_info.get("tier", "")) or (("CLEAN" in str(trade_info.get("details", "")).upper()) and (">=50%" in str(trade_info.get("details", "")) or ">=50%" in str(trade_info.get("tier", ""))))
+            is_aplus = (trade_date.weekday() in [0, 1]) and ("A++" in str(trade_info.get("tier", "")) or (("CLEAN" in str(trade_info.get("details", "")).upper()) and (">=50%" in str(trade_info.get("details", "")) or ">=50%" in str(trade_info.get("tier", "")))))
         else:
             is_aplus = False
+    elif "XAU" in symbol.upper():
+        is_aplus = bool(is_aplus) and (trade_date.weekday() in [0, 1])
 
     setup_tag = "⭐ A++ Setup" if is_aplus else "Standard Setup"
     strat_risk = trade_info.get('risk_allocation', get_strategy_risk_amount(symbol))
@@ -1704,8 +1706,9 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
                 
             _c_range = s_high - s_low
             _body_ratio = abs(s_close - s_open) / _c_range if _c_range > 0 else 0.0
-            _is_aplus = ("CLEAN" in rule_name) and (_body_ratio >= 0.50)
-            _tier = "⭐ A++ Setup (Clean DOL Impulse >=50% Body)" if _is_aplus else "Standard Setup"
+            _is_mon_or_tue = (target_date.weekday() in [0, 1])
+            _is_aplus = ("CLEAN" in rule_name) and (_body_ratio >= 0.50) and _is_mon_or_tue
+            _tier = "⭐ A++ Setup (Mon/Tue Clean DOL >=50% Body)" if _is_aplus else "Standard Setup"
             result_template.update({
                 "direction": trade_dir,
                 "entry_price": round(entry, 2),
@@ -2775,7 +2778,7 @@ if run_clicked:
                 <strong>Structure:</strong> 2-Hour morning reference candle at 18:00 NY / 06:30 IST &bull; Clean Breakout & Swept Breakout triggers.<br>
                 <strong>Stop Loss (SL):</strong> Opposite structural extreme &bull; <strong>Filter:</strong> <strong>0.165% to 0.994%</strong>.<br>
                 <strong>Profit Target (TP):</strong> <strong>1:3.30 RR</strong> &bull; <strong>Breakeven (BE):</strong> <strong>Armed at +2.50R</strong>.<br>
-                <strong>⭐ A++ Setup Tier:</strong> <strong>Clean DOL Breakout with Solid Body Ratio &ge; 50%</strong>. Breakouts with Body &lt; 50%, Swept Breakouts, or Sweep Rejections are Standard Setup.<br>
+                <strong>⭐ A++ Setup Tier:</strong> <strong>Clean DOL Breakout with Solid Body Ratio &ge; 50% on Monday & Tuesday ONLY</strong>. Wednesday/Friday trades or Breakouts with Body &lt; 50%, Swept Breakouts, or Sweep Rejections execute as Standard Setup.<br>
                 <strong>Risk Sizing & Fees:</strong> $300 Fixed Risk Allocation &bull; Broker Fee: $25.00.<br>
                 <strong>News Shield:</strong> Auto-exit 5 min prior to <strong>US NFP, CPI & FOMC Statement</strong>.
             </p>
@@ -2886,7 +2889,7 @@ else:
                     &bull; <strong>Timeframe:</strong> H2 &bull; <strong>Fee:</strong> $25.00<br>
                     &bull; <strong>Days:</strong> Mon, Tue, Wed, Fri (No Thu)<br>
                     &bull; <strong>Breakout:</strong> Swept & Clean (BE @ +2.5R)<br>
-                    &bull; <strong>A++ Edge:</strong> Clean DOL Breakout &ge;50% Body ⭐ A++ Setup<br>
+                    &bull; <strong>A++ Edge:</strong> Mon/Tue Clean DOL Breakout &ge;50% Body ⭐ A++ Setup<br>
                     &bull; <strong>News Shield:</strong> US NFP, CPI & FOMC<br>
                     &bull; <code style="font-size: 0.75rem; color: #cbd5e1;">ID: 6acaf24d7a78a186a5430938</code>
                 </div>
