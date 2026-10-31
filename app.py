@@ -1307,13 +1307,15 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
 # ------------------------------------------------------------------------------
 def run_gbpusd_strategy(target_date: datetime.date) -> dict | list[dict]:
     """
-    GBPUSD Asian Fib Strategy (GodMode):
-    - Asian Range 05:30-09:30 IST (Summer) / 06:30-10:30 IST (Winter)
-    - Pre-London Gap Invalidation (09:45-11:15 IST / 10:45-12:15 IST)
-    - London Entry Window (11:30-14:30 IST / 12:30-15:30 IST)
-    - 1:3.75 Target, No BE
-    - SL: 0.035% to 0.154%
-    - Double Entry (Entry 2) tracking if Entry 1 stops out without candle close past SL
+    GBPUSD Asian Fib Retracement Strategy (Audited Backtest Engine Parity - 1:3.75 RR, No BE):
+    - Asian Range: 05:30-09:30 IST (Summer) / 06:30-10:30 IST (Winter), Min Range 5 pips
+    - Pre-London Gap Filter (09:45-11:15 IST Summer / 10:45-12:15 IST Winter)
+    - London Entry Window (11:30-14:30 IST Summer / 12:30-15:30 IST Winter)
+    - Rolling Sweep Invalidation: Candle cannot close beyond rolling sweep extreme
+    - Entry Evaluation: Strict rejection confirmation, gap >= 0.01%, sweep close beyond prev close
+    - Stop Loss Corridor: 0.035% to 0.154%
+    - Target: Pure 1:3.75 RRR, Strictly No Breakeven
+    - Double Entry Protocol: Max 2 entries/day if Entry 1 stops out without candle close past SL
     """
     result = {
         "strategy_name": "GBPUSD ASIA 1.2 - 1.4 FIB RETRACMENT",
@@ -1371,11 +1373,7 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict | list[dict]:
         lon_start_t = time(11, 30) if is_summer else time(12, 30)
         lon_end_t = time(14, 30) if is_summer else time(15, 30)
         
-        asia_cond = (t_col >= asia_start_t) & (t_col <= asia_end_t)
-        gap_cond = (t_col >= gap_start_t) & (t_col <= gap_end_t)
-        lon_cond = (t_col >= lon_start_t) & (t_col <= lon_end_t)
-        
-        asia_df = day_df[asia_cond].reset_index(drop=True)
+        asia_df = day_df[(t_col >= asia_start_t) & (t_col <= asia_end_t)].reset_index(drop=True)
         if len(asia_df) < 4:
             result["status"] = "No Asian Session Data"
             return result
@@ -1396,7 +1394,7 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict | list[dict]:
             result["details"] = "Asian session open equals close; no directional bias."
             return result
             
-        is_asia_bearish = asia_close < asia_open
+        is_asia_bearish = (asia_close <= asia_open)
         direction = "long" if is_asia_bearish else "short"
         
         if direction == "long":
@@ -1409,166 +1407,261 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict | list[dict]:
             lvl_m04 = asia_high + 0.40 * rng
             lvl_12  = asia_low - 0.20 * rng
             lvl_m15 = asia_high + 1.50 * rng
-            
-        # RULE 1: PRE-LONDON GAP FILTER
-        gap_df = day_df[gap_cond].reset_index(drop=True)
-        date_str = target_date.strftime("%Y-%m-%d") if hasattr(target_date, 'strftime') else str(target_date)[:10]
-        whitelist_early = ['2024-08-29', '2024-09-03']
+
+        # RULE 1: PRE-LONDON GAP FILTER (09:45-11:15 IST / 10:45-12:15 IST)
+        gap_df = day_df[(t_col >= gap_start_t) & (t_col <= gap_end_t)].reset_index(drop=True)
+        pre_london_12 = False
         
-        if not gap_df.empty and date_str not in whitelist_early:
-            if direction == "long":
-                gap_low_min = gap_df['low'].min()
-                gap_high_max = gap_df['high'].max()
-                if gap_low_min <= lvl_m02:
-                    inval_row = gap_df[gap_df['low'] <= lvl_m02].iloc[0]
-                    result["status"] = "Invalidated (Pre-London Gap Touch)"
-                    result["details"] = f"Level -0.2 swept prematurely at {inval_row['dt_ist'].strftime('%H:%M')} IST before London open. Setup invalidated per strategy rules."
-                    return result
-                if gap_high_max >= lvl_12:
-                    inval_row = gap_df[gap_df['high'] >= lvl_12].iloc[0]
-                    result["status"] = "Invalidated (Pre-London 1.2 Touch)"
-                    result["details"] = f"Level 1.2 runaway reached prematurely at {inval_row['dt_ist'].strftime('%H:%M')} IST before London open. Setup invalidated."
-                    return result
-            else: # short
-                gap_high_max = gap_df['high'].max()
-                gap_low_min = gap_df['low'].min()
-                if gap_high_max >= lvl_m02:
-                    inval_row = gap_df[gap_df['high'] >= lvl_m02].iloc[0]
-                    result["status"] = "Invalidated (Pre-London Gap Touch)"
-                    result["details"] = f"Level +0.2 swept prematurely at {inval_row['dt_ist'].strftime('%H:%M')} IST before London open. Setup invalidated per strategy rules."
-                    return result
-                if gap_low_min <= lvl_12:
-                    inval_row = gap_df[gap_df['low'] <= lvl_12].iloc[0]
-                    result["status"] = "Invalidated (Pre-London 1.2 Touch)"
-                    result["details"] = f"Level 1.2 runaway reached prematurely at {inval_row['dt_ist'].strftime('%H:%M')} IST before London open. Setup invalidated."
-                    return result
-                    
-        # RULE 2: LONDON SESSION ENTRY EVALUATION
-        lon_df = day_df[lon_cond].reset_index(drop=True)
-        if lon_df.empty:
+        if not gap_df.empty:
+            for _, r in gap_df.iterrows():
+                if direction == "long":
+                    if r['low'] <= lvl_m02:
+                        result["status"] = "Invalidated (Pre-London Gap Touch)"
+                        result["details"] = f"Level -0.2 swept prematurely at {r['dt_ist'].strftime('%H:%M')} IST before London open. Setup invalidated per strategy rules."
+                        return result
+                    if r['high'] >= lvl_12:
+                        pre_london_12 = True
+                else: # short
+                    if r['high'] >= lvl_m02:
+                        result["status"] = "Invalidated (Pre-London Gap Touch)"
+                        result["details"] = f"Level +0.2 swept prematurely at {r['dt_ist'].strftime('%H:%M')} IST before London open. Setup invalidated per strategy rules."
+                        return result
+                    if r['low'] <= lvl_12:
+                        pre_london_12 = True
+
+        # RULE 2: LONDON SESSION ENTRY WINDOW
+        lon_mask = (t_col >= lon_start_t) & (t_col <= lon_end_t)
+        lon_indices = day_df[lon_mask].index.tolist()
+        if not lon_indices:
             result["status"] = "No London Session Data"
             return result
             
-        mode = "waiting"
-        lowest_wick = 999999.0
-        highest_wick = -999999.0
-        lowest_prev = 999999.0
-        highest_prev = -999999.0
-        touched_04 = False
-        ref_extreme = None
-        touch_idx = None
+        i0 = lon_indices[0]
+        i1 = lon_indices[-1]
+        n_candles = len(day_df)
         
-        for idx, row in lon_df.iterrows():
+        mode = "touch"
+        touch_i = None
+        lowest = None
+        lowest_prev = None
+        highest = None
+        highest_prev = None
+        entries = 0
+        trades = []
+        
+        i = i0
+        while i <= i1:
+            row = day_df.iloc[i]
             c_o, c_h, c_l, c_c = float(row['open']), float(row['high']), float(row['low']), float(row['close'])
             t_curr = row['dt_ist']
             
-            prior_rows = day_df[day_df['dt_ist'] < t_curr]
-            if not prior_rows.empty:
-                prev_c = float(prior_rows.iloc[-1]['close'])
-                prev_l = float(prior_rows.iloc[-1]['low'])
-                prev_h = float(prior_rows.iloc[-1]['high'])
-            else:
-                prev_c, prev_l, prev_h = c_o, c_l, c_h
-                
-            # Rule 2A: -1.5 Fib Level Invalidation
+            # Rule 2A: -1.5 Deep Fib Invalidation
             if direction == "long" and c_l <= lvl_m15:
-                result["status"] = "Invalidated (Level -1.5 Hit)"
-                result["details"] = f"Candle at {t_curr.strftime('%H:%M')} hit deep -1.5 Fib level ({lvl_m15:.5f}). Day invalidated."
-                return result
+                if entries == 0:
+                    result["status"] = "Invalidated (Level -1.5 Hit)"
+                    result["details"] = f"Candle at {t_curr.strftime('%H:%M')} hit deep -1.5 Fib level ({lvl_m15:.5f}). Setup dead."
+                    return result
+                break
             elif direction == "short" and c_h >= lvl_m15:
-                result["status"] = "Invalidated (Level -1.5 Hit)"
-                result["details"] = f"Candle at {t_curr.strftime('%H:%M')} hit deep -1.5 Fib level ({lvl_m15:.5f}). Day invalidated."
-                return result
+                if entries == 0:
+                    result["status"] = "Invalidated (Level -1.5 Hit)"
+                    result["details"] = f"Candle at {t_curr.strftime('%H:%M')} hit deep -1.5 Fib level ({lvl_m15:.5f}). Setup dead."
+                    return result
+                break
                 
-            # Mode: WAITING FOR -0.2 TOUCH
-            if mode == "waiting":
+            # Mode: WAITING FOR TOUCH
+            if mode == "touch":
                 if direction == "long":
-                    if c_h >= lvl_12 and c_l > lvl_m02:
+                    hit_12 = (c_h >= lvl_12)
+                    hit_02 = (c_l <= lvl_m02)
+                    if hit_12 and not pre_london_12 and not hit_02:
                         result["status"] = "Invalidated (1.2 Reached First)"
-                        result["details"] = f"Level 1.2 reached before -0.2 sweep at {t_curr.strftime('%H:%M')} IST. Setup dead."
+                        result["details"] = f"Level 1.2 reached first at {t_curr.strftime('%H:%M')} IST before -0.2 sweep."
                         return result
-                    if c_l <= lvl_m02:
-                        mode = "armed"
-                        ref_extreme = c_l
-                        lowest_wick = c_l
-                        lowest_prev = c_l
-                        touch_idx = idx
-                        if c_l <= lvl_m04:
-                            touched_04 = True
+                    if not hit_02:
+                        i += 1
+                        continue
+                    mode = "entry"
+                    touch_i = i
+                    lowest = c_l
+                    lowest_prev = c_l
                 else: # short
-                    if c_l <= lvl_12 and c_h < lvl_m02:
+                    hit_12 = (c_l <= lvl_12)
+                    hit_02 = (c_h >= lvl_m02)
+                    if hit_12 and not pre_london_12 and not hit_02:
                         result["status"] = "Invalidated (1.2 Reached First)"
-                        result["details"] = f"Level 1.2 reached before -0.2 sweep at {t_curr.strftime('%H:%M')} IST. Setup dead."
+                        result["details"] = f"Level 1.2 reached first at {t_curr.strftime('%H:%M')} IST before +0.2 sweep."
                         return result
-                    if c_h >= lvl_m02:
-                        mode = "armed"
-                        ref_extreme = c_h
-                        highest_wick = c_h
-                        highest_prev = c_h
-                        touch_idx = idx
-                        if c_h >= lvl_m04:
-                            touched_04 = True
-                            
-            # Mode: ARMED (ENTRY SCAN)
-            if mode == "armed":
+                    if not hit_02:
+                        i += 1
+                        continue
+                    mode = "entry"
+                    touch_i = i
+                    highest = c_h
+                    highest_prev = c_h
+
+            # Update rolling sweep levels
+            if direction == "long":
+                lowest_prev = lowest
+                lowest = min(lowest, c_l)
+            else:
+                highest_prev = highest
+                highest = max(highest, c_h)
+
+            # USER RULE: ROLLING SWEEP INVALIDATION
+            # The reference level rolls down/up with every sweep.
+            # A candle can close beyond original touch candle, but NEVER beyond rolling sweep extreme.
+            if i > touch_i:
                 if direction == "long":
-                    lowest_wick = min(lowest_wick, c_l)
-                    if c_l <= lvl_m04:
-                        touched_04 = True
-                        
-                    is_bullish = c_c > c_o
-                    if is_bullish:
-                        sl = (lowest_wick - 0.00001) if touched_04 else (lvl_m04 - 0.00002)
-                        risk = c_c - sl
-                        sl_pct = (risk / c_c) * 100.0
-                        
-                        if 0.035 <= sl_pct <= 0.154:
-                            tp = c_c + 3.75 * risk
-                            entry_close_ist = t_curr + timedelta(minutes=15)
-                            _is_aplus = (not touched_04) and (target_date.weekday() != 1)
-                            _tier = "⭐ A++ Setup (Clean -0.2 Long)" if _is_aplus else "Standard Setup"
-                            result.update({
-                                "direction": "long",
-                                "entry_price": round(c_c, 5),
-                                "entry_time_ist": entry_close_ist.strftime("%Y-%m-%dT%H:%M"),
-                                "sl_price": round(sl, 5),
-                                "tp_price": round(tp, 5),
-                                "sl_percentage": round(sl_pct, 3),
-                                "tp_percentage": round(sl_pct * 3.75, 3),
-                                "is_aplus": _is_aplus,
-                                "tier": _tier,
-                                "status": f"Active Signal (London Long - {_tier})",
-                                "details": f"Level -0.2 swept ({lvl_m02:.5f}) with confirmed rejection ({_tier})."
-                            })
+                    if c_c < lowest_prev or abs(c_c - lowest_prev) < 1e-6:
+                        why = f"Candle {t_curr.strftime('%H:%M')} closed beyond rolling sweep level ({c_c:.5f} <= {lowest_prev:.5f})"
+                        if entries == 0:
+                            result["status"] = "Invalidated (Closed Beyond Rolling Sweep Level)"
+                            result["details"] = f"{why}. Setup invalidated per strategy rules."
                             return result
+                        break
                 else: # short
-                    highest_wick = max(highest_wick, c_h)
-                    if c_h >= lvl_m04:
-                        touched_04 = True
-                        
-                    is_bearish = c_c < c_o
-                    if is_bearish:
-                        sl = (highest_wick + 0.00001) if touched_04 else (lvl_m04 + 0.00002)
-                        risk = sl - c_c
-                        sl_pct = (risk / c_c) * 100.0
-                        
-                        if 0.035 <= sl_pct <= 0.154:
-                            tp = c_c - 3.75 * risk
-                            entry_close_ist = t_curr + timedelta(minutes=15)
-                            result.update({
-                                "direction": "short",
-                                "entry_price": round(c_c, 5),
-                                "entry_time_ist": entry_close_ist.strftime("%Y-%m-%dT%H:%M"),
-                                "sl_price": round(sl, 5),
-                                "tp_price": round(tp, 5),
-                                "sl_percentage": round(sl_pct, 3),
-                                "tp_percentage": round(sl_pct * 3.75, 3),
-                                "is_aplus": False,
-                                "tier": "Standard Setup",
-                                "status": "Active Signal (London Short - Standard Setup)",
-                                "details": f"Level +0.2 swept ({lvl_m02:.5f}) with confirmed rejection (Standard Setup)."
-                            })
+                    if c_c > highest_prev or abs(c_c - highest_prev) < 1e-6:
+                        why = f"Candle {t_curr.strftime('%H:%M')} closed beyond rolling sweep level ({c_c:.5f} >= {highest_prev:.5f})"
+                        if entries == 0:
+                            result["status"] = "Invalidated (Closed Beyond Rolling Sweep Level)"
+                            result["details"] = f"{why}. Setup invalidated per strategy rules."
                             return result
+                        break
+
+            # ENTRY EVALUATION (Strict Audited Rejection Engine)
+            prior = day_df.iloc[:i]
+            if prior.empty:
+                i += 1
+                continue
+            p_c = float(prior.iloc[-1]['close'])
+            p_l = float(prior.iloc[-1]['low'])
+            p_h = float(prior.iloc[-1]['high'])
+            gap_pct = abs(c_c - p_c) / abs(p_c) * 100.0
+            
+            reasons = []
+            if direction == "long":
+                if not (c_c > c_o):
+                    reasons.append("NOT_BULLISH")
+                if abs(c_c - p_c) < 1e-9:
+                    reasons.append("CLOSE_EQUALS_PREV_CLOSE")
+                if (c_l < p_l) and not (c_c > p_c):
+                    reasons.append("SWEEP_CLOSE_NOT_BEYOND_PREV_CLOSE")
+                if round(gap_pct, 2) < 0.01 - 1e-12:
+                    reasons.append("CLOSE_GAP_<0.01%")
+                if abs(c_c - p_l) < 1e-6:
+                    reasons.append("CLOSE_EQUALS_PREV_LOW")
+            else: # short
+                if not (c_c < c_o):
+                    reasons.append("NOT_BEARISH")
+                if abs(c_c - p_c) < 1e-9:
+                    reasons.append("CLOSE_EQUALS_PREV_CLOSE")
+                if (c_h > p_h) and not (c_c < p_c):
+                    reasons.append("SWEEP_CLOSE_NOT_BEYOND_PREV_CLOSE")
+                if round(gap_pct, 2) < 0.01 - 1e-12:
+                    reasons.append("CLOSE_GAP_<0.01%")
+                if abs(c_c - p_h) < 1e-6:
+                    reasons.append("CLOSE_EQUALS_PREV_HIGH")
+                    
+            if reasons:
+                i += 1
+                continue
+                
+            # SL / TP Calculation
+            if direction == "long":
+                touched_04 = (lowest <= lvl_m04)
+                sl = (lowest - 0.00001) if touched_04 else (lvl_m04 - 0.00002)
+                risk = c_c - sl
+                pct = (risk / c_c) * 100.0
+                tp = c_c + 3.75 * risk
+            else: # short
+                touched_04 = (highest >= lvl_m04)
+                sl = (highest + 0.00001) if touched_04 else (lvl_m04 + 0.00002)
+                risk = sl - c_c
+                pct = (risk / c_c) * 100.0
+                tp = c_c - 3.75 * risk
+                
+            if risk <= 0 or pct < 0.035 - 1e-12:
+                if entries == 0:
+                    result["status"] = "Invalidated (SL Too Small)"
+                    result["details"] = f"SL% {pct:.4f}% below 0.035% minimum at {t_curr.strftime('%H:%M')}; day ends."
+                    return result
+                break
+                
+            if pct > 0.154 + 1e-12:
+                if entries == 0:
+                    result["status"] = "Invalidated (SL Too Large)"
+                    result["details"] = f"SL% {pct:.4f}% above 0.154% maximum at {t_curr.strftime('%H:%M')}; day ends."
+                    return result
+                break
+                
+            # Valid Entry Confirmed!
+            entries += 1
+            entry_close_ist = t_curr + timedelta(minutes=15)
+            _is_aplus = (direction == "long") and (not touched_04) and (target_date.weekday() != 1)
+            _tier = "⭐ A++ Setup (Clean -0.2 Long)" if _is_aplus else "Standard Setup"
+            
+            trade_dict = {
+                "strategy_name": "GBPUSD ASIA 1.2 - 1.4 FIB RETRACMENT",
+                "symbol": "GBPUSD",
+                "date": target_date,
+                "direction": direction,
+                "entry_no": entries,
+                "entry_price": round(c_c, 5),
+                "entry_time_ist": entry_close_ist.strftime("%Y-%m-%dT%H:%M"),
+                "sl_price": round(sl, 5),
+                "tp_price": round(tp, 5),
+                "sl_percentage": round(pct, 3),
+                "tp_percentage": round(pct * 3.75, 3),
+                "is_aplus": _is_aplus,
+                "tier": _tier,
+                "status": f"Active Signal (London {direction.upper()} - {_tier})",
+                "details": f"Level {'-0.2' if direction == 'long' else '+0.2'} swept ({lvl_m02:.5f}) with confirmed rejection ({_tier}).",
+                "data_source": result["data_source"]
+            }
+            trades.append(trade_dict)
+            
+            # Check for Double Entry (Entry 2) if Entry 1 stops out during London window
+            sl_hit = False
+            exit_idx = None
+            for j in range(i + 1, n_candles):
+                cj_h = float(day_df.iloc[j]['high'])
+                cj_l = float(day_df.iloc[j]['low'])
+                
+                if direction == "long":
+                    if cj_l <= sl:
+                        sl_hit = True
+                        exit_idx = j
+                        break
+                    elif cj_h >= tp:
+                        break
+                else: # short
+                    if cj_h >= sl:
+                        sl_hit = True
+                        exit_idx = j
+                        break
+                    elif cj_l <= tp:
+                        break
+                        
+            if sl_hit and entries < 2 and exit_idx is not None and exit_idx <= i1:
+                exit_candle = day_df.iloc[exit_idx]
+                exit_c = float(exit_candle['close'])
+                # No Re-entry if candle closed beyond SL
+                closed_beyond_sl = (exit_c < sl) if direction == "long" else (exit_c > sl)
+                if closed_beyond_sl:
+                    break
+                # Update rolling extreme through SL candle
+                if direction == "long":
+                    lowest = min(lowest, float(day_df.iloc[i + 1 : exit_idx + 1]['low'].min()))
+                else:
+                    highest = max(highest, float(day_df.iloc[i + 1 : exit_idx + 1]['high'].max()))
+                i = exit_idx + 1
+                continue
+            break
+            
+        if not trades:
+            return result
+        return trades if len(trades) > 1 else trades[0]
     except Exception as e:
         result["status"] = "Error"
         result["details"] = str(e)
