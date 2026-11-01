@@ -1931,10 +1931,13 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
 # ==============================================================================
 # BASE44 API INTEGRATION: SEARCH, SYNC & OPEN TRADES TRACKER
 # ==============================================================================
-def find_existing_trade(api_key: str, strategy_id: str, symbol: str, trade_date: datetime.date, entry_time_ist: Optional[str] = None) -> Optional[dict]:
-    """Finds existing trade entity for strategy_id & symbol on trade_date (or matching exact entry_time_ist), if already logged."""
+def find_existing_trades_for_day(api_key: str, strategy_id: str, symbol: str, trade_date: datetime.date) -> list[dict]:
+    """
+    Finds ALL existing trade entities in Base44 for strategy_id (or symbol) on trade_date.
+    Matches using date prefix YYYY-MM-DD or parsed timestamp date.
+    """
     if not api_key:
-        return None
+        return []
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
@@ -1947,19 +1950,153 @@ def find_existing_trade(api_key: str, strategy_id: str, symbol: str, trade_date:
         if resp.status_code == 200:
             data = resp.json()
             items = data.get("items", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-            date_str = trade_date.isoformat()
+            date_str = trade_date.isoformat()[:10]
+            matched = []
             for item in items:
-                if item.get("strategy_id") in strat_ids:
+                item_strat = item.get("strategy_id")
+                if item_strat in strat_ids or item.get("symbol") == symbol:
                     entry_ts = str(item.get("entry_timestamp", ""))
-                    if entry_time_ist:
-                        if entry_ts == entry_time_ist:
-                            return item
-                    else:
-                        if entry_ts.startswith(date_str):
-                            return item
+                    p_dt = parse_dt_safe(entry_ts)
+                    if (p_dt and p_dt.date() == trade_date) or entry_ts[:10] == date_str:
+                        matched.append(item)
+            return matched
     except Exception as e:
-        print(f"Error checking existing trade: {e}")
-    return None
+        print(f"Error fetching existing trades for {symbol} on {trade_date}: {e}")
+    return []
+
+def find_existing_trade(api_key: str, strategy_id: str, symbol: str, trade_date: datetime.date, entry_time_ist: Optional[str] = None) -> Optional[dict]:
+    """Finds existing trade entity for strategy_id & symbol on trade_date."""
+    items = find_existing_trades_for_day(api_key, strategy_id, symbol, trade_date)
+    return items[0] if items else None
+
+def remove_wrong_trades_for_day(api_key: str, strategy_id: str, symbol: str, trade_date: datetime.date, reason: str = "") -> list[str]:
+    """
+    If the strategy found NO valid trade setup on trade_date (or trade was blocked / skipped / invalid),
+    any trade logged under this strategy on this date in Base44 is a WRONG SETUP and is deleted.
+    Returns list of deleted trade IDs.
+    """
+    if not api_key:
+        return []
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    existing = find_existing_trades_for_day(api_key, strategy_id, symbol, trade_date)
+    deleted_ids = []
+    for item in existing:
+        t_id = item.get("id")
+        try:
+            del_r = requests.delete(f"{BASE44_API_URL}/{t_id}", headers=headers, timeout=10)
+            if del_r.status_code in [200, 204]:
+                deleted_ids.append(t_id)
+                print(f"🗑️ Deleted wrong setup {t_id} for {symbol} on {trade_date} ({reason})")
+        except Exception as e:
+            print(f"Failed to delete wrong trade {t_id}: {e}")
+    return deleted_ids
+
+def purge_all_wrong_setups_and_duplicates(api_key: str) -> dict:
+    """
+    Comprehensive journal audit & cleanup:
+    1. Removes any weekend trades (Saturday/Sunday).
+    2. Removes any trades violating day-of-week rules:
+       - USDJPY on Tuesday
+       - XAUUSD on Thursday
+       - EURUSD on Tue, Wed, Fri
+       - NAS100 on Friday
+    3. Detects and removes all excess duplicates, keeping only the single primary trade per strategy/day.
+    Returns summary dict of purged and deduplicated records.
+    """
+    if not api_key:
+        return {"purged_wrong": 0, "purged_duplicates": 0, "details_wrong": [], "details_duplicates": []}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    try:
+        resp = requests.get(BASE44_API_URL, headers=headers, timeout=12)
+        if resp.status_code != 200:
+            return {"purged_wrong": 0, "purged_duplicates": 0, "details_wrong": [], "details_duplicates": []}
+        data = resp.json()
+        items = data if isinstance(data, list) else data.get("items", [])
+    except Exception as e:
+        print(f"Failed to fetch trades for cleanup: {e}")
+        return {"purged_wrong": 0, "purged_duplicates": 0, "details_wrong": [], "details_duplicates": []}
+
+    deleted_wrong = []
+    deleted_dups = []
+    grouped = {}
+
+    for t in items:
+        t_id = t.get("id")
+        sym = t.get("symbol", "")
+        ets = str(t.get("entry_timestamp", ""))
+        p_dt = parse_dt_safe(ets)
+        if not p_dt:
+            continue
+        dow = p_dt.weekday()
+        d_val = p_dt.date()
+
+        # Rule validation
+        is_wrong = False
+        reason = ""
+        if dow in [5, 6]:
+            is_wrong = True
+            reason = f"Weekend trade ({p_dt.strftime('%A')})"
+        elif "JPY" in sym and dow == 1:
+            is_wrong = True
+            reason = "USDJPY Tuesday trade"
+        elif "XAU" in sym and dow == 3:
+            is_wrong = True
+            reason = "XAUUSD Thursday trade"
+        elif "EUR" in sym and dow not in [0, 3]:
+            is_wrong = True
+            reason = f"EURUSD on {p_dt.strftime('%A')}"
+        elif ("NAS" in sym or "US100" in sym) and dow in [4, 5, 6]:
+            is_wrong = True
+            reason = f"NAS100 on {p_dt.strftime('%A')}"
+
+        if is_wrong:
+            try:
+                del_r = requests.delete(f"{BASE44_API_URL}/{t_id}", headers=headers, timeout=10)
+                if del_r.status_code in [200, 204]:
+                    deleted_wrong.append(f"{sym} {d_val} ({reason}) [id: {t_id}]")
+            except Exception as e:
+                print(f"Error deleting wrong trade {t_id}: {e}")
+            continue
+
+        # Group valid trades for duplicate check
+        is_gbp_double = (sym == "GBPUSD" and ("double entry" in str(t.get("notes", "")).lower() or "entry 2" in str(t.get("notes", "")).lower()))
+        entry_tag = "entry2" if is_gbp_double else "entry1"
+        key = (sym, d_val, entry_tag)
+        grouped.setdefault(key, []).append(t)
+
+    # Deduplicate groups
+    for key, trade_list in grouped.items():
+        if len(trade_list) > 1:
+            def score_trade(tr):
+                s = 0
+                if tr.get("status") == "closed": s += 10
+                if "⭐ A++ Setup" in str(tr.get("notes", "")) or "🔹 Standard Setup" in str(tr.get("notes", "")): s += 5
+                if tr.get("exit_timestamp"): s += 2
+                return s
+            trade_list.sort(key=score_trade, reverse=True)
+            primary = trade_list[0]
+            dups = trade_list[1:]
+            for dup in dups:
+                dup_id = dup.get("id")
+                try:
+                    del_r = requests.delete(f"{BASE44_API_URL}/{dup_id}", headers=headers, timeout=10)
+                    if del_r.status_code in [200, 204]:
+                        deleted_dups.append(f"{key[0]} {key[1]} [id: {dup_id}]")
+                except Exception as e:
+                    print(f"Error deleting duplicate trade {dup_id}: {e}")
+
+    return {
+        "purged_wrong": len(deleted_wrong),
+        "purged_duplicates": len(deleted_dups),
+        "details_wrong": deleted_wrong,
+        "details_duplicates": deleted_dups
+    }
 
 def parse_dt_safe(ts_val) -> Optional[datetime.datetime]:
     if not ts_val:
@@ -2088,20 +2225,37 @@ def sync_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict, amoun
         "Content-Type": "application/json"
     }
 
-    # Duplicate / Existing Trade Check (using exact entry timestamp for Entry 1 vs Entry 2 differentiation)
-    existing = find_existing_trade(api_key, strategy_id, symbol, trade_date, entry_time_ist=entry_ts_str)
-    if existing:
-        t_id = existing.get("id")
-        # Check if already 100% up to date with exact prices and strategy ID
-        is_already_accurate = (
-            existing.get("status") == status and
-            existing.get("strategy_id") == strategy_id and
-            abs(float(existing.get("buy_price", 0.0)) - float(entry_price)) < 0.05 and
-            abs(float(existing.get("sell_price", 0.0)) - float(exit_price)) < 0.05
-        )
-        if is_already_accurate:
-            return "Skipped (Duplicate)", f"Trade already accurately logged @ {existing.get('sell_price')} (Net P&L: ${existing.get('net_pnl', 0):+.2f})", existing
+    # Check ALL existing trades for this strategy & symbol on this day
+    existing_list = find_existing_trades_for_day(api_key, strategy_id, symbol, trade_date)
+    is_double = (trade_info.get("entry_no") == 2 or trade_info.get("is_double_entry"))
 
+    primary_existing = None
+    duplicates_to_delete = []
+
+    if symbol == "GBPUSD":
+        for item in existing_list:
+            item_is_double = ("double entry" in str(item.get("notes", "")).lower() or "entry 2" in str(item.get("notes", "")).lower())
+            if item_is_double == is_double:
+                if primary_existing is None:
+                    primary_existing = item
+                else:
+                    duplicates_to_delete.append(item)
+    else:
+        if existing_list:
+            primary_existing = existing_list[0]
+            duplicates_to_delete = existing_list[1:]
+
+    # Remove all extra duplicate records from Base44
+    for dup in duplicates_to_delete:
+        dup_id = dup.get("id")
+        try:
+            requests.delete(f"{BASE44_API_URL}/{dup_id}", headers=headers, timeout=10)
+        except Exception:
+            pass
+
+    # IF EXISTING: UPDATE IN PLACE via PUT! DO NOT ADD DUPLICATE!
+    if primary_existing:
+        t_id = primary_existing.get("id")
         put_payload = {
             "strategy_id": strategy_id,
             "symbol": symbol,
@@ -2110,7 +2264,7 @@ def sync_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict, amoun
             "sell_price": float(exit_price),
             "quantity": float(quantity),
             "fees": float(fee),
-            "entry_timestamp": entry_ts_str if entry_ts_str else existing.get("entry_timestamp"),
+            "entry_timestamp": entry_ts_str if entry_ts_str else primary_existing.get("entry_timestamp"),
             "exit_timestamp": exit_ts_str,
             "status": status,
             "net_pnl": float(net_pnl),
@@ -2120,13 +2274,14 @@ def sync_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict, amoun
             put_r = requests.put(f"{BASE44_API_URL}/{t_id}", headers=headers, json=put_payload, timeout=10)
             if put_r.status_code in [200, 201]:
                 action_label = "Closed at TP/SL" if status == "closed" else "Open (Live P&L Updated)"
-                return "Updated", f"{action_label}: exit @ {exit_price} | Net P&L: ${net_pnl:+.2f} (Fee: ${fee:,.2f})", put_payload
+                del_msg = f" (Deleted {len(duplicates_to_delete)} duplicate{'s' if len(duplicates_to_delete) > 1 else ''})" if duplicates_to_delete else ""
+                return "Updated", f"{action_label}: exit @ {exit_price} | Net P&L: ${net_pnl:+.2f} (Fee: ${fee:,.2f}){del_msg}", put_payload
             else:
                 return "Error", f"HTTP {put_r.status_code}: {put_r.text}", put_payload
         except Exception as e:
             return "Error", f"Update failed: {e}", put_payload
 
-    # Create fresh record (POST)
+    # Create fresh record (POST) ONLY when no trade exists for this strategy on this day
     payload = {
         "strategy_id": strategy_id,
         "symbol": symbol,
@@ -2754,7 +2909,10 @@ async def run_daily_strategies(payload: RunRequest):
     amount = float(payload.amount if payload.amount is not None and payload.amount > 0 else 300.0)
     fees = float(payload.fees if payload.fees is not None else 40.0)
 
-    # 2. Check and update existing open trades in Base44 first
+    # 2. Clean up any invalid setups and duplicates in Base44 first
+    cleanup_res = purge_all_wrong_setups_and_duplicates(BASE44_API_KEY)
+
+    # Check and update existing open trades in Base44
     open_updates = check_and_update_all_open_trades(BASE44_API_KEY, default_risk=amount)
 
     results_list = []
@@ -2870,8 +3028,18 @@ async def run_daily_strategies(payload: RunRequest):
                     "status": trade_status
                 }
             else:
-                sync_status = "N/A (No Setup)"
-                sync_msg = "No signal triggered for live execution."
+                # WRONG SETUP REMOVAL:
+                # If on this day this strategy has NO trade (or was skipped/blocked),
+                # check if a wrong setup was logged in Base44 on this day and DELETE it!
+                deleted_ids = remove_wrong_trades_for_day(
+                    BASE44_API_KEY, strat_id, sym, target_date, reason=strat_result.get("status", "No setup")
+                )
+                if deleted_ids:
+                    sync_status = "Removed Wrong Setup"
+                    sync_msg = f"Deleted {len(deleted_ids)} wrong/invalid setup(s) from Base44 (IDs: {', '.join(deleted_ids)})"
+                else:
+                    sync_status = "N/A (No Setup)"
+                    sync_msg = "No signal triggered for live execution."
                 record_data = {}
                 exit_price = 0.0
                 entry_time_ist = None
