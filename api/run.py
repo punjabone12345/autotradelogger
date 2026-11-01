@@ -734,7 +734,8 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
         inst = "CAPITALCOM:US100"
     else:
         inst = ("EUR_USD" if "EUR" in symbol.upper() else ("USD_JPY" if "JPY" in symbol.upper() else ("GBP_USD" if "GBP" in symbol.upper() else "XAU_USD")))
-        candles_df = fetch_oanda_candles(inst, "M15", trade_date, end_date=trade_date + timedelta(days=2))
+        eval_end = trade_date + timedelta(days=4) if "XAU" in symbol.upper() else trade_date + timedelta(days=2)
+        candles_df = fetch_oanda_candles(inst, "M15", trade_date, end_date=eval_end)
     
     status = "open"
     exit_price = get_latest_market_price(symbol)
@@ -766,6 +767,11 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
             
         sub_df = candles_df[(candles_df['dt_ist'].dt.date >= trade_date) & 
                             ((candles_df['dt_ist'].dt.date > trade_date) | (candles_df['dt_ist'].dt.time >= e_time))].sort_values('time_utc').reset_index(drop=True)
+        
+        is_xau = ("XAU" in symbol.upper())
+        be_armed = False
+        current_sl = sl_price
+        risk_dist = abs(entry_price - sl_price)
             
         for _, c in sub_df.iterrows():
             c_high, c_low, c_dt_ist, c_time_utc = c['high'], c['low'], c['dt_ist'], c['time_utc']
@@ -819,11 +825,33 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
                     exit_reason = "Day Close Exit (17:00 ET)"
                     break
 
-            if direction == "long":
-                if c_low <= sl_price:
+            # XAUUSD Breakeven Arming: Armed at +2.50R with +0.20R cushion
+            if is_xau and not be_armed and risk_dist > 0:
+                if direction == "long" and c_high >= entry_price + 2.50 * risk_dist:
+                    be_armed = True
+                    current_sl = entry_price + 0.20 * risk_dist
+                elif direction == "short" and c_low <= entry_price - 2.50 * risk_dist:
+                    be_armed = True
+                    current_sl = entry_price - 0.20 * risk_dist
+
+            # EURUSD Intraday Evening Cutoff (20:00 Summer / 21:30 Winter IST)
+            is_eur = ("EUR" in symbol.upper())
+            if is_eur:
+                _sample_utc = c_time_utc
+                _is_summer = is_us_dst(_sample_utc)
+                _eur_close_t = time(20, 0) if _is_summer else time(21, 30)
+                if (c_dt_ist.date() == trade_date and c_dt_ist.time() >= _eur_close_t) or (c_dt_ist.date() > trade_date):
                     status = "closed"
-                    exit_price = sl_price
-                    exit_reason = "SL Hit"
+                    exit_price = c['open']
+                    exit_time_str = c_dt_ist.strftime("%Y-%m-%dT%H:%M")
+                    exit_reason = f"Evening Cutoff Exit ({_eur_close_t.strftime('%H:%M')} IST)"
+                    break
+
+            if direction == "long":
+                if c_low <= current_sl:
+                    status = "closed"
+                    exit_price = current_sl
+                    exit_reason = "BE (+0.20R) Hit" if be_armed else "SL Hit"
                     hit_exit = True
                 elif c_high >= tp_price:
                     status = "closed"
@@ -831,10 +859,10 @@ def evaluate_trade_lifecycle(trade_info: dict, risk_usd: float = 300.0, fee_over
                     exit_reason = "TP Hit"
                     hit_exit = True
             elif direction == "short":
-                if c_high >= sl_price:
+                if c_high >= current_sl:
                     status = "closed"
-                    exit_price = sl_price
-                    exit_reason = "SL Hit"
+                    exit_price = current_sl
+                    exit_reason = "BE (+0.20R) Hit" if be_armed else "SL Hit"
                     hit_exit = True
                 elif c_low <= tp_price:
                     status = "closed"
@@ -918,7 +946,19 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
         "data_source": "OANDA Live API"
     }
     
-    is_tuesday = (target_date.weekday() == 1)
+    # Strictly Skip Weekends
+    if target_date.weekday() in [5, 6]:
+        result["status"] = "Skipped (Weekend)"
+        result["details"] = f"{target_date.strftime('%A')} is a weekend. Financial markets are closed on Saturday and Sunday (Mon-Fri only)."
+        return result
+
+    # Strictly Skip Tuesdays
+    if target_date.weekday() == 1:
+        result["status"] = "Skipped (Tuesday Rule)"
+        result["details"] = "Tuesday is strictly excluded by USDJPY Champion strategy rules (No Tuesday filter). No live trade logged."
+        return result
+    
+    is_tuesday = False
     day_df = pd.DataFrame()
     live_df = fetch_oanda_candles("USD_JPY", "M15", target_date)
     if not live_df.empty:
@@ -1063,7 +1103,7 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                     entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
                                     entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
                                     _is_aplus = (target_date.weekday() == 3)
-                                    _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "Standard Setup"
+                                    _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "🔹 Standard Setup"
                                     result.update({
                                         "direction": "long",
                                         "entry_price": round(entry, 3),
@@ -1115,7 +1155,7 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                         entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
                                         entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
                                         _is_aplus = (target_date.weekday() == 3)
-                                        _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "Standard Setup"
+                                        _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "🔹 Standard Setup"
                                         result.update({
                                             "direction": "long",
                                             "entry_price": round(entry, 3),
@@ -1160,7 +1200,7 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                 entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
                                 entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
                                 _is_aplus = (target_date.weekday() == 3)
-                                _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "Standard Setup"
+                                _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "🔹 Standard Setup"
                                 result.update({
                                     "direction": "long",
                                     "entry_price": round(entry, 3),
@@ -1223,7 +1263,7 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                     entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
                                     entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
                                     _is_aplus = (target_date.weekday() == 3)
-                                    _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "Standard Setup"
+                                    _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "🔹 Standard Setup"
                                     result.update({
                                         "direction": "short",
                                         "entry_price": round(entry, 3),
@@ -1275,7 +1315,7 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                         entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
                                         entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
                                         _is_aplus = (target_date.weekday() == 3)
-                                        _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "Standard Setup"
+                                        _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "🔹 Standard Setup"
                                         result.update({
                                             "direction": "short",
                                             "entry_price": round(entry, 3),
@@ -1320,7 +1360,7 @@ def run_usdjpy_strategy(target_date: datetime.date) -> dict:
                                 entry_close_ist = s_df.iloc[i]['dt_ist'] + timedelta(minutes=15)
                                 entry_t_str = entry_close_ist.strftime("%Y-%m-%dT%H:%M")
                                 _is_aplus = (target_date.weekday() == 3)
-                                _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "Standard Setup"
+                                _tier = "⭐ A++ Setup (Thursday Power Trade)" if _is_aplus else "🔹 Standard Setup"
                                 result.update({
                                     "direction": "short",
                                     "entry_price": round(entry, 3),
@@ -1381,6 +1421,12 @@ def run_gbpusd_strategy(target_date: datetime.date) -> dict | list[dict]:
         "details": "",
         "data_source": "OANDA Live API"
     }
+    
+    # Strictly Skip Weekends
+    if target_date.weekday() in [5, 6]:
+        result["status"] = "Skipped (Weekend)"
+        result["details"] = f"{target_date.strftime('%A')} is a weekend. Financial markets are closed on Saturday and Sunday (Mon-Fri only)."
+        return result
     
     # Base Strategy: All days (Mon-Fri) allowed; Tuesday excluded from A++ tier only
     
@@ -1746,6 +1792,12 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
         "data_source": "OANDA Live API"
     }
     
+    # Strictly Skip Weekends
+    if target_date.weekday() in [5, 6]:
+        result["status"] = "Skipped (Weekend)"
+        result["details"] = f"{target_date.strftime('%A')} is a weekend. Financial markets are closed on Saturday and Sunday (Mon-Fri only)."
+        return result
+
     if target_date.weekday() == 3:
         result["status"] = "Skipped (Thursday Rule)"
         result["details"] = "Thursday is strictly skipped by base strategy rule."
@@ -1852,7 +1904,7 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
             _body_ratio = abs(s_close - s_open) / _c_range if _c_range > 0 else 0.0
             _is_mon_or_tue = (target_date.weekday() in [0, 1])
             _is_aplus = ("CLEAN" in rule_name) and (_body_ratio >= 0.50) and _is_mon_or_tue
-            _tier = "⭐ A++ Setup (Mon/Tue Clean DOL >=50% Body)" if _is_aplus else "Standard Setup"
+            _tier = "⭐ A++ Setup (Mon/Tue Clean DOL >=50% Body)" if _is_aplus else "🔹 Standard Setup"
             result.update({
                 "direction": trade_dir,
                 "entry_price": round(entry, 2),
@@ -1909,6 +1961,20 @@ def find_existing_trade(api_key: str, strategy_id: str, symbol: str, trade_date:
         print(f"Error checking existing trade: {e}")
     return None
 
+def parse_dt_safe(ts_val) -> Optional[datetime.datetime]:
+    if not ts_val:
+        return None
+    s = str(ts_val).strip().replace("Z", "")
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return dt.strptime(s[:len(fmt.replace("%", "")) + 2], fmt)
+        except Exception:
+            pass
+    try:
+        return dt.fromisoformat(s)
+    except Exception:
+        return None
+
 def check_pending_active_trade(api_key: str, symbol: str, current_entry_time_str: Optional[str] = None) -> tuple[bool, Optional[dict]]:
     """
     Checks if there is an active trade for 'symbol' that has not exited yet.
@@ -1922,6 +1988,7 @@ def check_pending_active_trade(api_key: str, symbol: str, current_entry_time_str
         "Content-Type": "application/json"
     }
     params = {"q": f'{{"symbol": "{symbol}"}}'}
+    p_cur = parse_dt_safe(current_entry_time_str)
     try:
         resp = requests.get(BASE44_API_URL, headers=headers, params=params, timeout=10)
         if resp.status_code == 200:
@@ -1930,22 +1997,23 @@ def check_pending_active_trade(api_key: str, symbol: str, current_entry_time_str
             for item in items:
                 entry_ts = item.get("entry_timestamp")
                 exit_ts = item.get("exit_timestamp")
+                p_entry = parse_dt_safe(entry_ts)
+                p_exit = parse_dt_safe(exit_ts)
                 
                 # If this is the exact same trade being evaluated, it does not block itself
-                if current_entry_time_str and entry_ts == current_entry_time_str:
+                if p_cur and p_entry and p_cur == p_entry:
                     continue
                     
                 if item.get("status") == "open":
-                    # Only block if the open trade was entered BEFORE current_entry_time_str
-                    if current_entry_time_str and entry_ts and entry_ts >= current_entry_time_str:
+                    if p_cur and p_entry and p_entry >= p_cur:
                         continue
                     return True, item
-                if not exit_ts and item.get("status") != "closed":
-                    if current_entry_time_str and entry_ts and entry_ts >= current_entry_time_str:
+                if not p_exit and item.get("status") != "closed":
+                    if p_cur and p_entry and p_entry >= p_cur:
                         continue
                     return True, item
-                if current_entry_time_str and entry_ts and exit_ts:
-                    if entry_ts < current_entry_time_str and exit_ts > current_entry_time_str:
+                if p_cur and p_entry and p_exit:
+                    if p_entry < p_cur < p_exit:
                         return True, item
     except Exception as e:
         print(f"Error checking pending trade: {e}")
@@ -2008,7 +2076,7 @@ def sync_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict, amoun
     elif "XAU" in symbol.upper():
         is_aplus = bool(is_aplus) and (trade_date.weekday() in [0, 1])
 
-    setup_tag = "⭐ A++ Setup" if is_aplus else "Standard Setup"
+    setup_tag = "⭐ A++ Setup" if is_aplus else "🔹 Standard Setup"
     notes = f"[{setup_tag}] | {sl_pct}% SL ({sl_price}) , {tp_pct}% TP ({tp_price}) | Risk: ${strat_risk:,.2f} | Fee: ${fee:,.2f}"
     if trade_info.get("entry_no") == 2 or trade_info.get("is_double_entry"):
         notes += " | Double Entry"
@@ -2245,8 +2313,14 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
         "data_source": "OANDA Live API"
     }
     
-    # Day Filter: Monday (0) and Thursday (3) ONLY
+    # Strictly Skip Weekends
     weekday = target_date.weekday()
+    if weekday in [5, 6]:
+        result["status"] = "Skipped (Weekend)"
+        result["details"] = f"{target_date.strftime('%A')} is a weekend. Financial markets are closed on Saturday and Sunday (Mon-Fri only)."
+        return result
+
+    # Day Filter: Monday (0) and Thursday (3) ONLY
     if weekday not in [0, 3]:
         day_name = target_date.strftime('%A')
         result["status"] = f"Skipped ({day_name} Rule)"
@@ -2363,8 +2437,8 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
             result["details"] = f"Signal candle risk with 1 point extension is {sl_pct:.3f}% ({risk_pips:.1f} pips), exceeding the 0.065% maximum threshold. Skipped to prevent over-extended risk."
             return result
             
-        # Target: Exactly 1:5.40 RR
-        rr = 5.40
+        # Target: Exactly 1:5.50 RR
+        rr = 5.50
         if direction == "long":
             tp = round(entry_price + rr * risk, 5)
         else:
@@ -2393,7 +2467,7 @@ def run_eurusd_strategy(target_date: datetime.date) -> dict:
         result["sl_percentage"] = round(sl_pct, 3)
         result["tp_percentage"] = round(tp_pct, 3)
         result["is_aplus"] = is_same_color
-        result["tier"] = "⭐ A++ Setup (Same-Color Continuation)" if is_same_color else "Standard Setup (Reversal)"
+        result["tier"] = "⭐ A++ Setup (Same-Color Continuation)" if is_same_color else "🔹 Standard Setup (Reversal)"
         result["status"] = f"Active Setup ({result['tier']})"
         result["details"] = (
             f"EURUSD 30M {direction.upper()} validated at {entry_time_str} IST ({season_name}). "
@@ -2573,7 +2647,7 @@ def run_nas100_strategy(target_date: datetime.date) -> dict:
 
         # Setup Tier Classification: Tuesday = A++ Setup
         is_aplus = (dow == 1)
-        tier = "⭐ A++ Setup (Tuesday Power Trade)" if is_aplus else "Standard Setup"
+        tier = "⭐ A++ Setup (Tuesday Power Trade)" if is_aplus else "🔹 Standard Setup"
 
         result_template.update({
             "direction": direction,
@@ -2645,17 +2719,37 @@ async def run_daily_strategies(payload: RunRequest):
                 s_d, e_d = e_d, s_d
             curr = s_d
             while curr <= e_d:
-                dates_to_eval.append(curr)
+                # Strictly filter out Saturday (5) and Sunday (6)
+                if curr.weekday() < 5:
+                    dates_to_eval.append(curr)
                 curr += timedelta(days=1)
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid date range format. Use YYYY-MM-DD.")
     elif payload.date:
         try:
-            dates_to_eval.append(dt.strptime(payload.date[:10], "%Y-%m-%d").date())
+            d = dt.strptime(payload.date[:10], "%Y-%m-%d").date()
+            if d.weekday() < 5:
+                dates_to_eval.append(d)
+            else:
+                return {
+                    "status": "Skipped (Weekend)",
+                    "message": f"{d.strftime('%A, %Y-%m-%d')} is a weekend. Financial markets are closed on Saturday and Sunday (Mon-Fri only).",
+                    "total_dates_evaluated": 0,
+                    "trades": []
+                }
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
     else:
-        dates_to_eval.append(datetime.date.today())
+        d = datetime.date.today()
+        if d.weekday() < 5:
+            dates_to_eval.append(d)
+        else:
+            return {
+                "status": "Skipped (Weekend)",
+                "message": f"Today ({d.strftime('%A, %Y-%m-%d')}) is a weekend. Financial markets are closed on Saturday and Sunday (Mon-Fri only).",
+                "total_dates_evaluated": 0,
+                "trades": []
+            }
 
     amount = float(payload.amount if payload.amount is not None and payload.amount > 0 else 300.0)
     fees = float(payload.fees if payload.fees is not None else 40.0)
@@ -2669,6 +2763,9 @@ async def run_daily_strategies(payload: RunRequest):
     updated_count = 0
     active_count = 0
     total_net_pnl = 0.0
+
+    # In-memory active positions tracker across multi-day evaluation
+    active_positions = {}
 
     # 3. Iterate over all dates in requested range
     for target_date in dates_to_eval:
@@ -2694,17 +2791,46 @@ async def run_daily_strategies(payload: RunRequest):
 
         for strat_result, strat_id in day_trades:
             is_active = strat_result["direction"] in ["long", "short"]
+            sym = strat_result["symbol"]
+            cur_entry_str = strat_result.get("entry_time_ist")
+            cur_entry_dt = None
+            if cur_entry_str:
+                try:
+                    cur_entry_dt = dt.strptime(cur_entry_str[:16], "%Y-%m-%dT%H:%M")
+                except Exception:
+                    pass
+            if not cur_entry_dt:
+                cur_entry_dt = dt(target_date.year, target_date.month, target_date.day, 12, 0)
             
-            # Universal Pending Trade Rule Check across all strategies
+            # Universal Active Position Holding Check (In-Memory + Base44)
             if is_active:
-                is_pending, pending_trade = check_pending_active_trade(
-                    BASE44_API_KEY, strat_result["symbol"], current_entry_time_str=strat_result.get("entry_time_ist")
-                )
-                if is_pending:
-                    is_active = False
-                    strat_result["direction"] = "NONE"
-                    strat_result["status"] = "Blocked (Pending Trade Active)"
-                    strat_result["details"] = f"Trade from {pending_trade.get('entry_timestamp', 'previous day')} is still active/open in Base44. Across all strategies, no new trade can be entered until the existing position is closed."
+                # 1. In-memory Active Position Check
+                if sym in active_positions:
+                    prev = active_positions[sym]
+                    prev_exit_dt = prev.get("exit_dt")
+                    if prev_exit_dt is None or cur_entry_dt < prev_exit_dt:
+                        is_active = False
+                        strat_result["direction"] = "NONE"
+                        strat_result["status"] = "Blocked (Pending Trade Active)"
+                        strat_result["details"] = (
+                            f"Trade from {prev.get('entry_time_ist', 'earlier session')} is still active/holding "
+                            f"(holding until {prev.get('exit_time_ist', 'open')}). Across all strategies, "
+                            f"no new trade can be entered until the existing position is closed."
+                        )
+
+                # 2. Base44 check
+                if is_active:
+                    is_pending, pending_trade = check_pending_active_trade(
+                        BASE44_API_KEY, sym, current_entry_time_str=cur_entry_str
+                    )
+                    if is_pending:
+                        is_active = False
+                        strat_result["direction"] = "NONE"
+                        strat_result["status"] = "Blocked (Pending Trade Active)"
+                        strat_result["details"] = (
+                            f"Trade from {pending_trade.get('entry_timestamp', 'previous day')} is still active/open in Base44. "
+                            f"Across all strategies, no new trade can be entered until the existing position is closed."
+                        )
 
             if is_active:
                 active_count += 1
@@ -2728,6 +2854,21 @@ async def run_daily_strategies(payload: RunRequest):
                 trade_status = record_data.get("status", "open")
                 fee_used = record_data.get("fees", fees)
                 notes_text = record_data.get("notes", "")
+
+                # Record in active_positions
+                parsed_exit_dt = None
+                if exit_time_ist and trade_status == "closed":
+                    try:
+                        parsed_exit_dt = dt.strptime(str(exit_time_ist)[:16], "%Y-%m-%dT%H:%M")
+                    except Exception:
+                        pass
+                active_positions[sym] = {
+                    "entry_time_ist": entry_time_ist,
+                    "exit_time_ist": exit_time_ist,
+                    "entry_dt": cur_entry_dt,
+                    "exit_dt": parsed_exit_dt,
+                    "status": trade_status
+                }
             else:
                 sync_status = "N/A (No Setup)"
                 sync_msg = "No signal triggered for live execution."
