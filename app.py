@@ -195,10 +195,10 @@ st.markdown("""
 # 1. SESSION STATE INITIALIZATION
 # ==============================================================================
 DEFAULT_AMOUNT = 300.0  # $300 risk amount per strategy
-NAS100_AMOUNT = 200.0   # $200 risk amount specifically for NAS100
+NAS100_AMOUNT = 300.0   # $300 risk amount for NAS100
 
 def get_strategy_risk_amount(symbol: str) -> float:
-    """Returns fixed risk allocation: $200 for NAS100 / US100, $300 for all other pairs."""
+    """Returns fixed risk allocation: $300 for NAS100 / US100 and all other pairs."""
     if "NAS" in symbol.upper() or "US100" in symbol.upper():
         return NAS100_AMOUNT
     return DEFAULT_AMOUNT
@@ -530,7 +530,7 @@ def get_trade_fee(symbol: str) -> float:
 def calculate_risk_quantity(symbol: str, entry_price: float, sl_price: float, risk_usd: float | None = None) -> float:
     """
     Calculates exact risk-based position size to risk precisely:
-    - $200 on NAS100 / US100
+    - $300 on NAS100 / US100
     - $300 on other pairs (USDJPY, GBPUSD, XAUUSD, EURUSD)
     Quantity = Risk / |entry_price - sl_price|
     - XAUUSD: Rounded to 1 decimal place (ounces/contracts).
@@ -2438,7 +2438,7 @@ def run_nas100_strategy(target_date: datetime.date) -> dict:
             "tp_percentage": round(tp_pct, 3),
             "is_aplus": is_aplus,
             "tier": tier,
-            "risk_allocation": 200.0,
+            "risk_allocation": 300.0,
             "status": f"Active Signal ({tier})",
             "details": f"Confirmed M15 US Open Impulse ({tier} {'Long' if direction=='long' else 'Short'} @ {c_close:.2f}). Body: {body_pct:.1f}%, Range: {range_pct:.2f}%."
         })
@@ -3010,7 +3010,7 @@ if run_clicked:
     with m3:
         st.metric("Base44 Synced", f"{synced_count} Updated", f"🛡️ {dup_count} Duplicates" if dup_count else "Fresh Entries")
     with m4:
-        st.metric("Risk Allocation", "$300 / $200 NAS", "Per Valid Signal")
+        st.metric("Risk Allocation", "$300 Flat", "Per Valid Signal")
         
     st.markdown("---")
     
@@ -3314,7 +3314,7 @@ else:
                     <span style="background: rgba(168, 85, 247, 0.2); color: #c084fc; font-size: 0.75rem; font-weight: 700; padding: 2px 8px; border-radius: 8px;">1:3.90 RR</span>
                 </div>
                 <div style="color: #94a3b8; font-size: 0.82rem; line-height: 1.5;">
-                    &bull; <strong>Timeframe:</strong> M15 &bull; <strong>Fee:</strong> $20.00 &bull; <strong>Risk:</strong> $200 Fixed<br>
+                    &bull; <strong>Timeframe:</strong> M15 &bull; <strong>Fee:</strong> $20.00 &bull; <strong>Risk:</strong> $300 Fixed<br>
                     &bull; <strong>Days:</strong> Mon, Tue, Wed, Thu (No Fri)<br>
                     &bull; <strong>Trigger:</strong> 09:30 ET Bar, 45% Body, 4pt Buffer SL<br>
                     &bull; <strong>A++ Edge:</strong> Tuesday ⭐ A++ Setup (3.34 PF)<br>

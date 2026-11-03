@@ -80,10 +80,10 @@ class RunRequest(BaseModel):
     fees: Optional[float] = 40.0
 
 DEFAULT_AMOUNT = 300.0
-NAS100_AMOUNT = 200.0
+NAS100_AMOUNT = 300.0
 
 def get_strategy_risk_amount(symbol: str, default_amount: float = 300.0) -> float:
-    """Returns fixed risk allocation: $200 for NAS100 / US100, default_amount ($300) for other pairs."""
+    """Returns fixed risk allocation: $300 for NAS100 / US100 and other pairs."""
     if "NAS" in str(symbol).upper() or "US100" in str(symbol).upper():
         return NAS100_AMOUNT
     return default_amount
@@ -365,7 +365,7 @@ def fetch_m1_exit_time(instrument: str, start_dt_utc: datetime.datetime, end_dt_
 def calculate_risk_quantity(symbol: str, entry_price: float, sl_price: float, risk_usd: float | None = None) -> float:
     """
     Calculates exact risk-based position size to risk precisely risk_usd on Stop Loss:
-    - $200 on NAS100 / US100
+    - $300 on NAS100 / US100
     - $300 on other pairs (USDJPY, GBPUSD, XAUUSD, EURUSD)
     Quantity = Risk / |entry_price - sl_price|
     - XAUUSD: Rounded to 1 decimal place (ounces).
@@ -2814,7 +2814,7 @@ def run_nas100_strategy(target_date: datetime.date) -> dict:
             "tp_percentage": round(tp_pct, 3),
             "is_aplus": is_aplus,
             "tier": tier,
-            "risk_allocation": 200.0,
+            "risk_allocation": 300.0,
             "status": f"Active Signal ({tier})",
             "details": f"Confirmed M15 US Open Impulse ({tier} {'Long' if direction=='long' else 'Short'} @ {c_close:.2f}). Body: {body_pct:.1f}%, Range: {range_pct:.2f}%."
         })
