@@ -1903,8 +1903,14 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
             _c_range = s_high - s_low
             _body_ratio = abs(s_close - s_open) / _c_range if _c_range > 0 else 0.0
             _is_mon_or_tue = (target_date.weekday() in [0, 1])
-            _is_aplus = ("CLEAN" in rule_name) and (_body_ratio >= 0.50) and _is_mon_or_tue
-            _tier = "⭐ A++ Setup (Mon/Tue Clean DOL >=50% Body)" if _is_aplus else "🔹 Standard Setup"
+            _is_sl_aplus = (sl_pct < 0.245) or (sl_pct > 0.405)
+            _is_aplus = ("CLEAN" in rule_name) and (_body_ratio >= 0.50) and _is_mon_or_tue and _is_sl_aplus
+            _tier = "⭐ A++ Setup (Mon/Tue Clean DOL >=50% Body & SL <0.245% or >0.405%)" if _is_aplus else "🔹 Standard Setup"
+            
+            detail_note = f"2H DOL confirmed: {rule_name} ({_tier})"
+            if ("CLEAN" in rule_name) and (_body_ratio >= 0.50) and _is_mon_or_tue and not _is_sl_aplus:
+                detail_note += f" [SL {sl_pct:.3f}% falls in excluded 0.245%-0.405% corridor -> Standard Setup]"
+
             result.update({
                 "direction": trade_dir,
                 "entry_price": round(entry, 2),
@@ -1916,7 +1922,7 @@ def run_xauusd_strategy(target_date: datetime.date) -> dict:
                 "is_aplus": _is_aplus,
                 "tier": _tier,
                 "status": f"Active Signal ({rule_name} - {_tier})",
-                "details": f"2H DOL confirmed: {rule_name} ({_tier})"
+                "details": detail_note
             })
             return result
         else:
@@ -2207,11 +2213,15 @@ def sync_trade_to_base44(api_key: str, strategy_id: str, trade_info: dict, amoun
         elif "GBP" in symbol_u:
             is_aplus = (direction == "long") and (trade_date.weekday() != 1) and ("-0.4" not in str(trade_info.get("details", "")))
         elif "XAU" in symbol_u:
-            is_aplus = (trade_date.weekday() in [0, 1]) and ("A++" in str(trade_info.get("tier", "")) or (("CLEAN" in str(trade_info.get("details", "")).upper()) and (">=50%" in str(trade_info.get("details", "")) or ">=50%" in str(trade_info.get("tier", "")))))
+            sl_pct_val = float(trade_info.get("sl_percentage", 0.0))
+            is_sl_aplus = (sl_pct_val < 0.245) or (sl_pct_val > 0.405)
+            is_aplus = (trade_date.weekday() in [0, 1]) and is_sl_aplus and ("A++" in str(trade_info.get("tier", "")) or (("CLEAN" in str(trade_info.get("details", "")).upper()) and (">=50%" in str(trade_info.get("details", "")) or ">=50%" in str(trade_info.get("tier", "")))))
         else:
             is_aplus = False
     elif "XAU" in symbol.upper():
-        is_aplus = bool(is_aplus) and (trade_date.weekday() in [0, 1])
+        sl_pct_val = float(trade_info.get("sl_percentage", 0.0))
+        is_sl_aplus = (sl_pct_val < 0.245) or (sl_pct_val > 0.405)
+        is_aplus = bool(is_aplus) and (trade_date.weekday() in [0, 1]) and is_sl_aplus
 
     setup_tag = "⭐ A++ Setup" if is_aplus else "🔹 Standard Setup"
     notes = f"[{setup_tag}] | {sl_pct}% SL ({sl_price}) , {tp_pct}% TP ({tp_price}) | Risk: ${strat_risk:,.2f} | Fee: ${fee:,.2f}"
